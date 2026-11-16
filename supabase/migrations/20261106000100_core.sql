@@ -4,7 +4,10 @@
 -- One sequence for every synced table. Each insert or update takes the next value as the
 -- row's rev, so clients can pull "everything after rev N" across all tables.
 create sequence rev_seq;
--- The trigger below runs as the calling user, so that user needs the sequence.
+-- The trigger below runs as the calling user, so that user needs to take the next value (USAGE).
+-- USAGE does not include setval, so nobody signed in can move the sequence. Privileges are always
+-- granted explicitly: whatever a project hands out by default is revoked first.
+revoke all on sequence rev_seq from anon, authenticated;
 grant usage on sequence rev_seq to authenticated;
 
 create table todos (
@@ -28,6 +31,12 @@ create table todos (
 );
 
 create index todos_user_id_rev_idx on todos (user_id, rev);
+
+-- Signed-in users may read, create and change their rows, but never delete or truncate them:
+-- a deleted row is only marked with deleted_at, and a purged one stays forever as a tombstone.
+-- anon gets nothing. (TRUNCATE is not covered by RLS, so it must not be granted.)
+revoke all on todos from anon, authenticated;
+grant select, insert, update on todos to authenticated;
 
 -- rev and updated_at are written by the server only: whatever the client sends is replaced.
 -- updated_at can be kept for one transaction by setting app.keep_updated_at to 'on'
@@ -54,6 +63,7 @@ create trigger todos_set_rev_and_updated_at
   for each row execute function set_rev_and_updated_at();
 
 -- Row-level security: one policy per command, each user sees and writes only their own rows.
+-- The delete policy matches nothing: it backs up the missing DELETE grant above.
 alter table todos enable row level security;
 
 create policy todos_select on todos for select to authenticated
@@ -64,10 +74,11 @@ create policy todos_update on todos for update to authenticated
   using (user_id = auth.uid())
   with check (user_id = auth.uid());
 create policy todos_delete on todos for delete to authenticated
-  using (user_id = auth.uid());
+  using (false);
 
 -- Results of already-applied client operations, for idempotent retries.
--- RLS is on and there is deliberately no policy: only security definer functions can touch it.
+-- RLS is on with deliberately no policy, and no privileges are granted: only security definer
+-- functions can touch it.
 create table applied_ops (
   user_id    uuid,
   op_id      uuid,
@@ -77,6 +88,7 @@ create table applied_ops (
 );
 
 alter table applied_ops enable row level security;
+revoke all on applied_ops from anon, authenticated;
 
 -- Which tables take part in sync, and which fields are copied when a conflict is resolved.
 -- Signed-in users may read it and nothing else; the default grants are revoked first.

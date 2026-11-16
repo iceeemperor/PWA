@@ -81,18 +81,28 @@ describe('todos: row-level security', () => {
     expect((await rows(A))[0].user_id).toBe(A);
   });
   it('user_id defaults to the signed-in user', async () => { expect((await ins(A, {})).user_id).toBe(A); expect((await ins(B, {})).user_id).toBe(B); });
-  it('a user can delete only their own rows', async () => {
+  it('nobody signed in can hard-delete a row, not even their own: a purged row must stay forever as a tombstone', async () => {
     const x = await ins(A, {});
-    await t.asUser(B); await t.pg.query('delete from todos where id = $1', [x.id]); expect(await rows(A)).toHaveLength(1);
-    await t.asUser(A); await t.pg.query('delete from todos where id = $1', [x.id]); expect(await rows(A)).toHaveLength(0);
+    await t.asUser(A);
+    await expect(t.pg.query('delete from todos where id = $1', [x.id])).rejects.toThrow(/permission denied for table todos/);
+    await t.asUser(B);
+    await expect(t.pg.query('delete from todos where id = $1', [x.id])).rejects.toThrow(/permission denied for table todos/);
+    expect(await rows(A)).toHaveLength(1);
   });
-  it('anon can neither read nor write todos', async () => {
+  it('the DELETE policy is a second lock: even with delete granted by mistake, no row can be deleted', async () => {
+    const x = await ins(A, {});
+    await t.asRole('postgres'); await t.pg.exec('grant delete on todos to authenticated');
+    await t.asUser(A);
+    expect((await t.pg.query('delete from todos where id = $1 returning id', [x.id])).rows).toHaveLength(0);
+    expect(await rowOf(t, x.id)).toMatchObject({ id: x.id });
+  });
+  it('anon has no access to todos at all', async () => {
     const x = await ins(A, {}); await t.asRole('anon');
-    expect((await t.pg.query('select * from todos')).rows).toHaveLength(0);
-    await expect(t.pg.query(`insert into todos (id, title) values ($1, 'x')`, [randomUUID()])).rejects.toThrow();
-    await expect(t.pg.query(`insert into todos (id, user_id, title) values ($1, $2, 'x')`, [randomUUID(), A])).rejects.toThrow(/row-level security/);
-    expect((await t.pg.query('update todos set done = true where id = $1 returning id', [x.id])).rows).toHaveLength(0);
-    await t.pg.query('delete from todos where id = $1', [x.id]);
+    await expect(t.pg.query('select * from todos')).rejects.toThrow(/permission denied for table todos/);
+    await expect(t.pg.query(`insert into todos (id, title) values ($1, 'x')`, [randomUUID()])).rejects.toThrow(/permission denied for table todos/);
+    await expect(t.pg.query(`insert into todos (id, user_id, title) values ($1, $2, 'x')`, [randomUUID(), A])).rejects.toThrow(/permission denied for table todos/);
+    await expect(t.pg.query('update todos set done = true where id = $1', [x.id])).rejects.toThrow(/permission denied for table todos/);
+    await expect(t.pg.query('delete from todos where id = $1', [x.id])).rejects.toThrow(/permission denied for table todos/);
     expect(await rowOf(t, x.id)).toMatchObject({ id: x.id, done: false });
   });
   it('todos has four separate policies, and the insert and update ones carry a WITH CHECK', async () => {
@@ -111,7 +121,7 @@ describe('todos: row-level security', () => {
 
 describe('todos: constraints', () => {
   it('title must be non-empty unless purged_at is set', async () => {
-    await expect(ins(A, { title: '' })).rejects.toThrow();
+    await expect(ins(A, { title: '' })).rejects.toThrow(/check constraint/);
     await expect(ins(A, { title: '', purged_at: new Date().toISOString() })).resolves.toBeDefined();
   });
   it('kind and priority only accept their allowed values', async () => {
@@ -151,11 +161,62 @@ describe('sync bookkeeping tables', () => {
     await expect(t.pg.query('select * from sync_tables')).rejects.toThrow(/permission denied/);
     await expect(t.pg.query(`insert into sync_tables (name) values ('x')`)).rejects.toThrow(/permission denied/);
   });
-  it('applied_ops has RLS on and no policy: signed-in users see and write nothing', async () => {
+  it('applied_ops is closed to signed-in users and anon: only security definer functions can touch it', async () => {
     await t.pg.query(`insert into applied_ops (user_id, op_id, result) values ($1, $2, '{}')`, [A, randomUUID()]);
+    for (const asWho of [() => t.asUser(A), () => t.asRole('anon')]) {
+      await asWho();
+      await expect(t.pg.query('select * from applied_ops')).rejects.toThrow(/permission denied for table applied_ops/);
+      await expect(t.pg.query(`insert into applied_ops (user_id, op_id, result) values ($1, $2, '{}')`, [A, randomUUID()])).rejects.toThrow(/permission denied for table applied_ops/);
+    }
+    await t.asRole('postgres'); expect((await t.pg.query('select * from applied_ops')).rows).toHaveLength(1);
+  });
+  it('applied_ops has RLS on and no policy: a mistaken grant would still show and allow nothing', async () => {
+    await t.pg.query(`insert into applied_ops (user_id, op_id, result) values ($1, $2, '{}')`, [A, randomUUID()]);
+    await t.pg.exec('grant select, insert on applied_ops to authenticated');
     await t.asUser(A);
     expect((await t.pg.query('select * from applied_ops')).rows).toHaveLength(0);
-    await expect(t.pg.query(`insert into applied_ops (user_id, op_id, result) values ($1, $2, '{}')`, [A, randomUUID()])).rejects.toThrow();
+    await expect(t.pg.query(`insert into applied_ops (user_id, op_id, result) values ($1, $2, '{}')`, [A, randomUUID()])).rejects.toThrow(/row-level security/);
     await t.asRole('postgres'); expect((await t.pg.query('select * from applied_ops')).rows).toHaveLength(1);
+  });
+});
+
+// The migration grants explicitly and the harness gives nothing by default, so what a role can do
+// is exactly what the migration says. TRUNCATE and setval are not covered by RLS, so they are checked here.
+describe('privileges', () => {
+  const can = async (role: string, priv: string, table: string) =>
+    (await t.pg.query<{ ok: boolean }>('select has_table_privilege($1, $2, $3) as ok', [role, `public.${table}`, priv])).rows[0].ok;
+
+  it('authenticated may select, insert and update todos, and nothing else', async () => {
+    for (const priv of ['select', 'insert', 'update']) expect(await can('authenticated', priv, 'todos'), priv).toBe(true);
+    for (const priv of ['delete', 'truncate', 'references', 'trigger']) expect(await can('authenticated', priv, 'todos'), priv).toBe(false);
+  });
+  it('anon has no privilege on any table', async () => {
+    for (const table of ['todos', 'applied_ops', 'sync_tables'])
+      for (const priv of ['select', 'insert', 'update', 'delete', 'truncate', 'references', 'trigger']) expect(await can('anon', priv, table), `${table} ${priv}`).toBe(false);
+  });
+  it('signed-in users cannot truncate todos or applied_ops, and anon cannot truncate todos', async () => {
+    const x = await ins(A, {});
+    await t.asRole('postgres');
+    await t.pg.query(`insert into applied_ops (user_id, op_id, result) values ($1, $2, '{}')`, [A, randomUUID()]);
+    await t.asUser(A);
+    await expect(t.pg.query('truncate todos')).rejects.toThrow(/permission denied for table todos/);
+    await expect(t.pg.query('truncate applied_ops')).rejects.toThrow(/permission denied for table applied_ops/);
+    await t.asRole('anon');
+    await expect(t.pg.query('truncate todos')).rejects.toThrow(/permission denied for table todos/);
+    expect(await rowOf(t, x.id)).toMatchObject({ id: x.id });
+    await t.asRole('postgres'); expect((await t.pg.query('select * from applied_ops')).rows).toHaveLength(1);
+  });
+  it('rev_seq: signed-in users may only take the next value (their writes need it); they cannot reset it or read it', async () => {
+    const seq = async (role: string, priv: string) =>
+      (await t.pg.query<{ ok: boolean }>(`select has_sequence_privilege($1, 'public.rev_seq', $2) as ok`, [role, priv])).rows[0].ok;
+    expect(await seq('authenticated', 'usage')).toBe(true);
+    expect(await seq('authenticated', 'update')).toBe(false);
+    expect(await seq('authenticated', 'select')).toBe(false);
+    for (const priv of ['usage', 'update', 'select']) expect(await seq('anon', priv), `anon ${priv}`).toBe(false);
+    await t.asUser(A);
+    await expect(t.pg.query(`select setval('rev_seq', 1)`)).rejects.toThrow(/permission denied for sequence rev_seq/);
+    expect((await t.pg.query<{ n: number }>(`select nextval('rev_seq') as n`)).rows[0].n).toBeGreaterThan(0);
+    await t.asRole('anon');
+    await expect(t.pg.query(`select nextval('rev_seq')`)).rejects.toThrow(/permission denied for sequence rev_seq/);
   });
 });

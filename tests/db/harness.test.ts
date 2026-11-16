@@ -100,19 +100,31 @@ describe('createTestDb', () => {
     await t.asRole('postgres'); expect(await whoAmI()).toEqual({ role: 'postgres', uid: null });
   });
 
-  it('grants tables, sequences and functions created later to anon and authenticated, like Supabase', async () => {
+  // Supabase no longer exposes new tables by default, so the harness gives anon and authenticated
+  // nothing on objects created later: a migration that forgets a grant fails its own tests.
+  it('grants nothing on tables, sequences and functions created later to anon and authenticated', async () => {
     await t.pg.exec(`
       create table public.probe (n int);
       create sequence public.probe_seq;
       create function public.probe_fn() returns int language sql as 'select 1';
     `);
     for (const role of ['anon', 'authenticated'] as const) {
-      const r = await t.pg.query<{ tbl: boolean; seq: boolean; fn: boolean }>(
-        `select has_table_privilege($1, 'public.probe', 'insert') as tbl,
-                has_sequence_privilege($1, 'public.probe_seq', 'usage') as seq,
-                has_function_privilege($1, 'public.probe_fn()', 'execute') as fn`, [role]);
-      expect(r.rows[0]).toEqual({ tbl: true, seq: true, fn: true });
+      for (const priv of ['select', 'insert', 'update', 'delete', 'truncate', 'references', 'trigger'])
+        expect((await t.pg.query<{ ok: boolean }>(`select has_table_privilege($1, 'public.probe', $2) as ok`, [role, priv])).rows[0].ok, `${role} table ${priv}`).toBe(false);
+      for (const priv of ['usage', 'select', 'update'])
+        expect((await t.pg.query<{ ok: boolean }>(`select has_sequence_privilege($1, 'public.probe_seq', $2) as ok`, [role, priv])).rows[0].ok, `${role} sequence ${priv}`).toBe(false);
+      expect((await t.pg.query<{ ok: boolean }>(`select has_function_privilege($1, 'public.probe_fn()', 'execute') as ok`, [role])).rows[0].ok, `${role} function execute`).toBe(false);
     }
+  });
+
+  it('an explicit grant is what gives a role access, and auth.uid() works for both roles', async () => {
+    await t.pg.exec(`create table public.probe (n int); grant select, insert on public.probe to authenticated;`);
+    await t.asUser(TEST_USER_A);
+    await t.pg.query('insert into public.probe values (1)');
+    expect((await t.pg.query('select * from public.probe')).rows).toHaveLength(1);
+    await t.asRole('anon');
+    await expect(t.pg.query('select * from public.probe')).rejects.toThrow(/permission denied for table probe/);
+    expect((await t.pg.query<{ u: string | null }>('select auth.uid() as u')).rows[0].u).toBeNull();
   });
 
   it('gives every call its own empty in-memory database', async () => {
@@ -133,6 +145,11 @@ describe('migrationFiles', () => {
   it('lists .sql files in file-name order and skips .cron.sql files and other files', () => {
     for (const f of ['20260102_b.sql', '20260101_a.sql', '20260103_schedule.cron.sql', 'notes.md', '20260104_c.sql']) writeFileSync(join(dir, f), '');
     expect(migrationFiles(dir)).toEqual(['20260101_a.sql', '20260102_b.sql', '20260104_c.sql']);
+  });
+
+  it('only takes files named like the Supabase CLI does (<digits>_<name>.sql): a stray seed.sql is ignored', () => {
+    for (const f of ['seed.sql', 'schema.sql', '20260105.sql', '_x.sql', '20260101_a.sql']) writeFileSync(join(dir, f), '');
+    expect(migrationFiles(dir)).toEqual(['20260101_a.sql']);
   });
 
   it('finds the real migrations directory', () => {

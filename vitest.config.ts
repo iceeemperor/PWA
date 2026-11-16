@@ -9,5 +9,7 @@ export default defineConfig({
     environment: 'node',
     setupFiles: ['tests/setup.ts'],
     include: ['tests/**/*.test.{ts,tsx}'],
+    // The first createTestDb() of a db test file starts PGlite (2 to 3 s on a small machine, longer when several files run at once).
+    hookTimeout: 30_000,
   },
 });

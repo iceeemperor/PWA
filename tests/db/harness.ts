@@ -20,33 +20,37 @@ export type TodoRow = Record<string, any>;
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../supabase/migrations', import.meta.url));
 
+// The Supabase CLI only treats files named <digits>_<name>.sql as migrations.
+const MIGRATION_NAME = /^\d+_.+\.sql$/;
+
 /**
- * The migrations the harness runs: `.sql` files in file-name order, without `*.cron.sql`
- * (those schedule jobs with pg_cron, which PGlite does not have).
+ * The migrations the harness runs, in file-name order: files the Supabase CLI would run (so not a
+ * stray seed.sql), without `*.cron.sql` (those schedule jobs with pg_cron, which PGlite does not have).
  */
 export function migrationFiles(dir: string = MIGRATIONS_DIR): string[] {
   return readdirSync(dir)
-    .filter(f => f.endsWith('.sql') && !f.endsWith('.cron.sql'))
+    .filter(f => MIGRATION_NAME.test(f) && !f.endsWith('.cron.sql'))
     .sort();
 }
 
-// What Supabase provides before any migration runs: the auth schema with auth.users and auth.uid(),
-// the two API roles, and default privileges that give both roles everything on new public objects.
-// Row-level security, not grants, is then what keeps users apart, exactly as on a real project.
-// (ALTER DEFAULT PRIVILEGES takes one object class per statement, hence three statements.)
+// What Supabase provides before any migration runs: the auth schema with auth.users and auth.uid()
+// and the two API roles.
+// Unlike old Supabase projects, nothing is granted by default: a table, sequence or function created
+// by a migration gives anon and authenticated no privilege at all (functions would otherwise be
+// executable by PUBLIC), so a migration that forgets a grant fails its own tests. Row-level security
+// then keeps users apart on top of the explicit grants.
 const SUPABASE_SHIM = `
   create role anon nologin;
   create role authenticated nologin;
+  alter default privileges revoke execute on functions from public;
   create schema auth;
   create table auth.users (id uuid primary key);
   create function auth.uid() returns uuid language sql stable as $$
     select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid
   $$;
   grant usage on schema auth to anon, authenticated;
+  grant execute on function auth.uid() to anon, authenticated;
   grant usage on schema public to anon, authenticated;
-  alter default privileges in schema public grant all on tables to anon, authenticated;
-  alter default privileges in schema public grant all on sequences to anon, authenticated;
-  alter default privileges in schema public grant all on functions to anon, authenticated;
 `;
 
 // Starting PGlite cold costs about 1.5 s (it runs initdb). So the schema is built once per test
