@@ -101,20 +101,31 @@ describe('createTestDb', () => {
   });
 
   // Supabase no longer exposes new tables by default, so the harness gives anon and authenticated
-  // nothing on objects created later: a migration that forgets a grant fails its own tests.
-  it('grants nothing on tables, sequences and functions created later to anon and authenticated', async () => {
+  // nothing on tables and sequences created later: a migration that forgets a grant fails its own tests.
+  // Functions are different: they are still executable by anon and authenticated by default (on top of
+  // PUBLIC's own default), so a migration has to revoke that on purpose.
+  it('grants nothing on tables and sequences created later to anon and authenticated', async () => {
     await t.pg.exec(`
       create table public.probe (n int);
       create sequence public.probe_seq;
-      create function public.probe_fn() returns int language sql as 'select 1';
     `);
     for (const role of ['anon', 'authenticated'] as const) {
       for (const priv of ['select', 'insert', 'update', 'delete', 'truncate', 'references', 'trigger'])
         expect((await t.pg.query<{ ok: boolean }>(`select has_table_privilege($1, 'public.probe', $2) as ok`, [role, priv])).rows[0].ok, `${role} table ${priv}`).toBe(false);
       for (const priv of ['usage', 'select', 'update'])
         expect((await t.pg.query<{ ok: boolean }>(`select has_sequence_privilege($1, 'public.probe_seq', $2) as ok`, [role, priv])).rows[0].ok, `${role} sequence ${priv}`).toBe(false);
-      expect((await t.pg.query<{ ok: boolean }>(`select has_function_privilege($1, 'public.probe_fn()', 'execute') as ok`, [role])).rows[0].ok, `${role} function execute`).toBe(false);
     }
+  });
+
+  it('lets anon and authenticated execute functions created later, like Supabase, even after revoking from public alone', async () => {
+    const canRun = async (role: string) =>
+      (await t.pg.query<{ ok: boolean }>(`select has_function_privilege($1, 'public.probe_fn()', 'execute') as ok`, [role])).rows[0].ok;
+    await t.pg.exec(`create function public.probe_fn() returns int language sql as 'select 1'`);
+    expect([await canRun('anon'), await canRun('authenticated')]).toEqual([true, true]);
+    await t.pg.exec('revoke all on function public.probe_fn() from public');
+    expect([await canRun('anon'), await canRun('authenticated')]).toEqual([true, true]);
+    await t.pg.exec('revoke all on function public.probe_fn() from public, anon, authenticated');
+    expect([await canRun('anon'), await canRun('authenticated')]).toEqual([false, false]);
   });
 
   it('an explicit grant is what gives a role access, and auth.uid() works for both roles', async () => {

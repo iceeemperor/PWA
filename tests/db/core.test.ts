@@ -1,6 +1,9 @@
+import { PGlite } from '@electric-sql/pglite';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createTestDb, rowOf, TEST_USER_A as A, TEST_USER_B as B, type TestDb } from './harness';
+import { createTestDb, MIGRATIONS_DIR, migrationFiles, rowOf, SUPABASE_SHIM, TEST_USER_A as A, TEST_USER_B as B, type TestDb } from './harness';
 
 type Row = Record<string, any>;
 
@@ -180,8 +183,23 @@ describe('sync bookkeeping tables', () => {
   });
 });
 
-// The migration grants explicitly and the harness gives nothing by default, so what a role can do
-// is exactly what the migration says. TRUNCATE and setval are not covered by RLS, so they are checked here.
+// Functions are executable by anon and authenticated by default (like on Supabase), so the tests that
+// Tasks 5, 6 and 13 write for their functions can tell a missing `revoke ... from anon` from a good migration.
+describe('function privileges', () => {
+  const call = async () => (await t.pg.query<{ n: number }>('select public.probe_fn() as n')).rows[0].n;
+
+  it('revoking only from public leaves a function callable by anon: an "anon cannot call" test catches that mistake', async () => {
+    await t.pg.exec(`create function public.probe_fn() returns int language sql as 'select 1'; revoke all on function public.probe_fn() from public;`);
+    await t.asRole('anon'); expect(await call()).toBe(1);               // the half-done revoke is visible
+    await t.asRole('postgres');
+    await t.pg.exec('revoke all on function public.probe_fn() from public, anon, authenticated; grant execute on function public.probe_fn() to authenticated;');
+    await t.asRole('anon'); await expect(call()).rejects.toThrow(/permission denied for function probe_fn/);
+    await t.asUser(A); expect(await call()).toBe(1);
+  });
+});
+
+// The migration grants explicitly and the harness gives tables and sequences nothing by default, so what
+// a role can do with them is exactly what the migration says. TRUNCATE and setval are not covered by RLS, so they are checked here.
 describe('privileges', () => {
   const can = async (role: string, priv: string, table: string) =>
     (await t.pg.query<{ ok: boolean }>('select has_table_privilege($1, $2, $3) as ok', [role, `public.${table}`, priv])).rows[0].ok;
@@ -219,4 +237,55 @@ describe('privileges', () => {
     await t.asRole('anon');
     await expect(t.pg.query(`select nextval('rev_seq')`)).rejects.toThrow(/permission denied for sequence rev_seq/);
   });
+});
+
+// Projects created before Supabase stopped exposing new tables still hand every new table, sequence and
+// function to anon and authenticated. The `revoke all` lines in the migration are what keep the privileges
+// right there, and the harness (which grants nothing by default) cannot show them working. So this runs the
+// migrations on a fresh database that has the old default grants.
+describe('migration on a project with the old default grants', () => {
+  it('still ends up with exactly the intended privileges', async () => {
+    const pg = new PGlite();
+    try {
+      await pg.exec(SUPABASE_SHIM);
+      await pg.exec(`
+        alter default privileges in schema public grant all on tables to anon, authenticated;
+        alter default privileges in schema public grant all on sequences to anon, authenticated;
+        alter default privileges in schema public grant all on functions to anon, authenticated;
+      `);
+      for (const file of migrationFiles()) await pg.exec(readFileSync(join(MIGRATIONS_DIR, file), 'utf8'));
+
+      const granted = async (check: 'has_table_privilege' | 'has_sequence_privilege', role: string, object: string, privs: string[]) =>
+        (await pg.query<{ p: string }>(
+          `select p from unnest($3::text[]) with ordinality as u(p, i) where ${check}($1, $2, p) order by i`,
+          [role, `public.${object}`, privs])).rows.map(r => r.p);
+      const tablePrivs = ['select', 'insert', 'update', 'delete', 'truncate', 'references', 'trigger'];
+      const seqPrivs = ['usage', 'select', 'update'];
+
+      // The old defaults really are in force here: a table nobody revoked is open to both roles.
+      await pg.exec('create table public.probe (n int)');
+      expect(await granted('has_table_privilege', 'authenticated', 'probe', tablePrivs)).toEqual(tablePrivs);
+      expect(await granted('has_table_privilege', 'anon', 'probe', tablePrivs)).toEqual(tablePrivs);
+
+      expect({
+        'todos authenticated': await granted('has_table_privilege', 'authenticated', 'todos', tablePrivs),
+        'todos anon': await granted('has_table_privilege', 'anon', 'todos', tablePrivs),
+        'applied_ops authenticated': await granted('has_table_privilege', 'authenticated', 'applied_ops', tablePrivs),
+        'applied_ops anon': await granted('has_table_privilege', 'anon', 'applied_ops', tablePrivs),
+        'sync_tables authenticated': await granted('has_table_privilege', 'authenticated', 'sync_tables', tablePrivs),
+        'sync_tables anon': await granted('has_table_privilege', 'anon', 'sync_tables', tablePrivs),
+        'rev_seq authenticated': await granted('has_sequence_privilege', 'authenticated', 'rev_seq', seqPrivs),
+        'rev_seq anon': await granted('has_sequence_privilege', 'anon', 'rev_seq', seqPrivs),
+      }).toEqual({
+        'todos authenticated': ['select', 'insert', 'update'],
+        'todos anon': [],
+        'applied_ops authenticated': [],
+        'applied_ops anon': [],
+        'sync_tables authenticated': ['select'],
+        'sync_tables anon': [],
+        'rev_seq authenticated': ['usage'],
+        'rev_seq anon': [],
+      });
+    } finally { await pg.close(); }
+  }, 30_000);
 });

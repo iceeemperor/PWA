@@ -18,7 +18,7 @@ export interface TestDb {
 /** A row as it comes back from PGlite (timestamps and dates are Date, small bigints are numbers). */
 export type TodoRow = Record<string, any>;
 
-const MIGRATIONS_DIR = fileURLToPath(new URL('../../supabase/migrations', import.meta.url));
+export const MIGRATIONS_DIR = fileURLToPath(new URL('../../supabase/migrations', import.meta.url));
 
 // The Supabase CLI only treats files named <digits>_<name>.sql as migrations.
 const MIGRATION_NAME = /^\d+_.+\.sql$/;
@@ -34,15 +34,18 @@ export function migrationFiles(dir: string = MIGRATIONS_DIR): string[] {
 }
 
 // What Supabase provides before any migration runs: the auth schema with auth.users and auth.uid()
-// and the two API roles.
-// Unlike old Supabase projects, nothing is granted by default: a table, sequence or function created
-// by a migration gives anon and authenticated no privilege at all (functions would otherwise be
-// executable by PUBLIC), so a migration that forgets a grant fails its own tests. Row-level security
-// then keeps users apart on top of the explicit grants.
-const SUPABASE_SHIM = `
+// and the two API roles, plus the default privileges of a current project:
+// - tables and sequences created later give anon and authenticated NOTHING (Supabase no longer exposes
+//   new tables by default), so a migration that forgets a grant fails its own tests;
+// - functions created later ARE executable by anon and authenticated (explicit default grant), on top
+//   of Postgres's own default for PUBLIC. Supabase's "expose new tables" setting does not change that,
+//   so a migration has to `revoke execute ... from public, anon, authenticated` on purpose, and a
+//   test that "anon cannot call it" then catches a missing revoke.
+// Row-level security keeps users apart on top of the explicit grants.
+export const SUPABASE_SHIM = `
   create role anon nologin;
   create role authenticated nologin;
-  alter default privileges revoke execute on functions from public;
+  alter default privileges grant execute on functions to anon, authenticated;
   create schema auth;
   create table auth.users (id uuid primary key);
   create function auth.uid() returns uuid language sql stable as $$
