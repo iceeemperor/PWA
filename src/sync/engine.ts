@@ -131,7 +131,8 @@ export function createSyncEngine(deps: SyncDeps): SyncEngine {
 
   /**
    * Removes the pushed op, moves later ops of the same record onto the returned rev, and updates the local copy:
-   * the whole server record when nothing else is queued for it, otherwise only the server-owned columns,
+   * the whole server record when nothing else is queued for it, otherwise only the server-owned columns
+   * (deleted_at stays local while a queued delete or restore for the record is still to come),
    * so newer local edits stay visible until they are pushed too.
    */
   function settleApplied(op: QueuedOp, res: PushResult): Promise<void> {
@@ -139,11 +140,16 @@ export function createSyncEngine(deps: SyncDeps): SyncEngine {
       const queue = tx.objectStore(QUEUE);
       await queue.delete(op.seq);
       let othersPending = false;
+      // A queued delete or restore still to come decides the trash state locally, not the server.
+      let trashStatePending = false;
       let cursor = await queue.openCursor(IDBKeyRange.lowerBound(op.seq, true));
       while (cursor) {
         const later = cursor.value as QueuedOp;
         if (later.table === op.table && later.id === op.id) {
-          if (later.failed === null) othersPending = true;
+          if (later.failed === null) {
+            othersPending = true;
+            if (later.kind === 'delete' || later.kind === 'restore') trashStatePending = true;
+          }
           if (later.kind !== 'insert' && res.rev !== null && later.base_rev !== res.rev) {
             await cursor.update({ ...later, base_rev: res.rev });
           }
@@ -165,7 +171,7 @@ export function createSyncEngine(deps: SyncDeps): SyncEngine {
           ...local,
           rev: server.rev,
           updated_at: server.updated_at,
-          deleted_at: server.deleted_at,
+          deleted_at: trashStatePending ? local.deleted_at : server.deleted_at,
           purged_at: server.purged_at,
         });
       }

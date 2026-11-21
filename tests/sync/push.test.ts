@@ -245,6 +245,59 @@ describe('push: order, retries and the local copy', () => {
     expect(await a.repo.get('todos', r.id)).toBeDefined();
   });
 
+  /** The next push goes through, and the one after it fails with a network error. */
+  function failAfterFirstPush(): void {
+    const original = flaky.push.bind(flaky);
+    vi.spyOn(flaky, 'push').mockImplementationOnce(async (op: PushOp) => {
+      const res = await original(op);
+      flaky.failNext('network');
+      return res;
+    });
+  }
+
+  it('a queued delete keeps the record in the trash while an earlier op is settled', async () => {
+    const r = await a.repo.create('todos', { title: 'x' });
+    await a.repo.remove('todos', r.id);
+    const trashedAt = (await rawTodo(r.id))!.deleted_at;
+    failAfterFirstPush();
+    expect(await a.engine.sync()).toMatchObject({ outcome: 'offline', pushed: 1 });
+    expect((await rowOf(t, r.id)).deleted_at).toBeNull(); // the server only has the insert so far
+    expect((await rawTodo(r.id))!.deleted_at).toBe(trashedAt);
+    expect(await a.repo.list('todos')).toEqual([]);
+    expect((await a.repo.list('todos', { trashed: true })).map((x) => x.id)).toEqual([r.id]);
+    await expect(a.repo.update('todos', r.id, { done: true })).rejects.toThrow(/trash/);
+  });
+
+  it('the queued delete then pushes cleanly on the next sync', async () => {
+    const r = await a.repo.create('todos', { title: 'x' });
+    await a.repo.remove('todos', r.id);
+    failAfterFirstPush();
+    await a.engine.sync();
+    expect(await a.engine.sync()).toMatchObject({ outcome: 'ok', pushed: 1, dropped: 0, failed: 0, conflicts: 0 });
+    expect(await a.repo.pendingCount()).toBe(0);
+    const row = await rowOf(t, r.id);
+    expect(row.deleted_at).not.toBeNull();
+    const local = (await rawTodo(r.id))!;
+    expect(local.deleted_at).not.toBeNull();
+    expect(local.rev).toBe(Number(row.rev));
+    expect((await a.repo.list('todos', { trashed: true })).map((x) => x.id)).toEqual([r.id]);
+  });
+
+  it('a queued restore keeps the record out of the trash while an earlier delete is settled', async () => {
+    const r = await a.repo.create('todos', { title: 'x' });
+    await a.engine.sync();
+    await a.repo.remove('todos', r.id);
+    await a.repo.restore('todos', r.id);
+    failAfterFirstPush();
+    expect(await a.engine.sync()).toMatchObject({ outcome: 'offline', pushed: 1 });
+    expect((await rowOf(t, r.id)).deleted_at).not.toBeNull(); // the server has the delete, not yet the restore
+    expect((await rawTodo(r.id))!.deleted_at).toBeNull();
+    expect((await a.repo.list('todos')).map((x) => x.id)).toEqual([r.id]);
+    await a.repo.update('todos', r.id, { title: 'edited' }); // allowed: locally it is live
+    expect(await a.engine.sync()).toMatchObject({ outcome: 'ok', pushed: 2, dropped: 0 });
+    expect(await rowOf(t, r.id)).toMatchObject({ deleted_at: null, title: 'edited' });
+  });
+
   it('records the engine writes always carry deleted_at and purged_at', async () => {
     const r = await a.repo.create('todos', { title: 'x' });
     await a.engine.sync();
