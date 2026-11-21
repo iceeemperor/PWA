@@ -1,5 +1,5 @@
 import { CloudError, type CloudClient, type CloudErrorKind } from '../../src/sync/cloud';
-import type { PullPage, PushOp, PushResult } from '../../src/domain/types';
+import type { BackupFile, ImportSummary, PullPage, PushOp, PushResult } from '../../src/domain/types';
 import type { TestDb } from '../db/harness';
 
 // Every call signs in as its user and then runs one SQL function. Several clients (devices) can share
@@ -50,8 +50,9 @@ export function createPgliteCloud(t: TestDb, uid: string): CloudClient {
     purgeExpired() {
       return call(t, uid, 'select purge_expired() as r', [], () => undefined);
     },
-    async importBackup() {
-      throw new Error('import_backup not implemented until Task 13');
+    importBackup(payload: BackupFile, restorePurged: boolean) {
+      return call(t, uid, 'select import_backup($1::jsonb, $2) as r', [JSON.stringify(payload), restorePurged],
+        (r) => r as ImportSummary);
     },
   };
 }
