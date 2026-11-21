@@ -1,6 +1,6 @@
 import type { IDBPTransaction } from 'idb';
 import type { LocalDb } from '../data/local-db';
-import type { PushOp, PushResult, QueuedOp, TableName } from '../domain/types';
+import { TABLES, type PullPage, type PushOp, type PushResult, type QueuedOp, type TableName } from '../domain/types';
 import { CloudError, type CloudClient, type CloudErrorKind } from './cloud';
 
 /** Pull starts this many revs before the cursor (spec 8.1), so commits that landed out of order are not missed. */
@@ -38,7 +38,7 @@ export interface SyncDeps {
 }
 
 export interface SyncEngine {
-  /** Pushes the queue (and, from Task 8, pulls). A call while a run is going returns that run. */
+  /** Pushes the queue, then (if the push was not stopped) pulls every page. A call while a run is going returns that run. */
   sync(): Promise<SyncReport>;
   status(): SyncStatus;
   /** `fn` is called on every status change and after every run. Returns the unsubscribe function. */
@@ -47,6 +47,8 @@ export interface SyncEngine {
 
 
 const QUEUE = 'queue';
+const META = 'meta';
+const CURSOR = 'cursor';
 const LOCK_NAME = 'pa-sync';
 
 type Stored = Record<string, unknown> & { id: string; rev: number; deleted_at: string | null; purged_at: string | null };
@@ -67,6 +69,28 @@ const STOPS: Record<Exclude<CloudErrorKind, 'rejected'>, SyncReport['outcome']> 
 /** A server record as the local copy: deleted_at and purged_at always present (the Repo reads a missing key as set). */
 function asLocal(rec: Record<string, unknown>): Stored {
   return { ...rec, rev: Number(rec.rev), deleted_at: (rec.deleted_at ?? null) as string | null, purged_at: (rec.purged_at ?? null) as string | null } as Stored;
+}
+
+/**
+ * The pulled server record with the record's pending ops laid on top in seq order, so local edits not yet pushed
+ * stay visible. Insert/update ops bring their `fields`; delete/restore ops carry no fields (Repo queues `{}`), so
+ * the last of them decides deleted_at: restore → null, delete → the user's local trash time (else the server's,
+ * else now). That matches settleApplied: while a delete/restore is queued, local deleted_at is the user's intent.
+ * rev, purged_at and id always stay the server's.
+ */
+function overlay(server: Stored, local: Stored | undefined, ops: QueuedOp[]): Stored {
+  const merged: Stored = { ...server };
+  let trash: 'delete' | 'restore' | undefined;
+  for (const op of ops) {
+    if (op.kind === 'insert' || op.kind === 'update') Object.assign(merged, op.fields);
+    else trash = op.kind;
+  }
+  if (trash === 'restore') merged.deleted_at = null;
+  if (trash === 'delete') merged.deleted_at = local?.deleted_at ?? server.deleted_at ?? new Date().toISOString();
+  merged.id = server.id;
+  merged.rev = server.rev;
+  merged.purged_at = server.purged_at;
+  return merged;
 }
 
 function toPushOp(op: QueuedOp): PushOp {
@@ -150,7 +174,8 @@ export function createSyncEngine(deps: SyncDeps): SyncEngine {
             othersPending = true;
             if (later.kind === 'delete' || later.kind === 'restore') trashStatePending = true;
           }
-          if (later.kind !== 'insert' && res.rev !== null && later.base_rev !== res.rev) {
+          // Never lower: a replayed (stale) result can carry an older rev than the op already saw.
+          if (later.kind !== 'insert' && res.rev !== null && (later.base_rev === null || later.base_rev < res.rev)) {
             await cursor.update({ ...later, base_rev: res.rev });
           }
         }
@@ -207,6 +232,82 @@ export function createSyncEngine(deps: SyncDeps): SyncEngine {
     });
   }
 
+  /**
+   * Applies one pull page and moves the cursor, in ONE transaction over every table, the queue and meta, so the
+   * cursor never gets ahead of (or behind) the records it stands for. Only IndexedDB requests are awaited inside.
+   * Returns how many rows were applied.
+   */
+  async function applyPage(page: PullPage, pageMaxRev: number): Promise<number> {
+    const tx = db.raw.transaction([...TABLES, QUEUE, META], 'readwrite');
+    tx.done.catch(() => {});
+    try {
+      const queue = tx.objectStore(QUEUE);
+      // Pending (not failed) ops per record, in seq order (getAll returns key order).
+      const pending = new Map<string, QueuedOp[]>();
+      for (const op of (await queue.getAll()) as QueuedOp[]) {
+        if (op.failed !== null) continue;
+        const key = `${op.table}\u0000${op.id}`;
+        const list = pending.get(key);
+        if (list) list.push(op);
+        else pending.set(key, [op]);
+      }
+
+      let applied = 0;
+      for (const { table, row } of page.rows) {
+        if (!(TABLES as readonly string[]).includes(table)) continue;
+        const store = tx.objectStore(table);
+        const server = asLocal(row);
+        const local = (await store.get(server.id)) as Stored | undefined;
+        if (local && server.rev <= local.rev) continue;
+        const key = `${table}\u0000${server.id}`;
+        const ops = pending.get(key) ?? [];
+        if (server.purged_at !== null) {
+          // A tombstone wins over anything still queued for the record.
+          for (const op of ops) await queue.delete(op.seq);
+          pending.delete(key);
+          await store.put(server);
+        } else if (ops.length > 0) {
+          await store.put(overlay(server, local, ops));
+        } else {
+          await store.put(server);
+        }
+        applied++;
+      }
+
+      const meta = tx.objectStore(META);
+      const cursor = Number((await meta.get(CURSOR)) ?? 0);
+      if (pageMaxRev > cursor) await meta.put(pageMaxRev, CURSOR);
+      await tx.done;
+      return applied;
+    } catch (e) {
+      try { tx.abort(); } catch { /* already finished */ }
+      await tx.done.catch(() => {});
+      throw e;
+    }
+  }
+
+  /** Pulls every page after the rewound cursor. Returns the stop outcome, or null when it went through. */
+  async function pull(report: SyncReport): Promise<SyncReport['outcome'] | null> {
+    const limit = deps.pageSize ?? PULL_PAGE;
+    const cursor = Number((await db.getMeta<number>(CURSOR)) ?? 0);
+    let since = Math.max(0, cursor - PULL_REWIND);
+    for (;;) {
+      let page: PullPage;
+      try {
+        page = await deps.cloud.pull(since, limit);
+      } catch (e) {
+        if (!(e instanceof CloudError)) return 'offline';
+        // A pull has nothing the user could fix; a refused one is treated as the cloud not serving.
+        return e.kind === 'rejected' ? 'unavailable' : STOPS[e.kind];
+      }
+      const pageMaxRev = page.rows.reduce((m, r) => Math.max(m, Number(r.row.rev)), since);
+      report.pulled += await applyPage(page, pageMaxRev);
+      // An empty page cannot move `since`; stop rather than ask for the same page forever.
+      if (!page.has_more || page.rows.length === 0) return null;
+      since = pageMaxRev;
+    }
+  }
+
   async function run(): Promise<SyncReport> {
     const report: SyncReport = { outcome: 'ok', pushed: 0, dropped: 0, failed: 0, pulled: 0, conflicts: 0 };
     setStatus({ state: 'syncing', ...(await counts()) });
@@ -248,7 +349,13 @@ export function createSyncEngine(deps: SyncDeps): SyncEngine {
       }
     }
 
-    // Pull arrives in Task 8.
+    // Pull only after a push run that reached the end of the queue (failed ops do not stop it).
+    if (report.outcome === 'ok') {
+      const stopped = await pull(report);
+      if (stopped) report.outcome = stopped;
+    }
+
+    // Engine writes do not go through Repo.onChange: this status update is how listeners learn of them.
     setStatus({
       state: report.outcome === 'ok' ? 'idle' : report.outcome,
       ...(await counts()),
