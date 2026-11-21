@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 
@@ -5,6 +6,10 @@ import react from '@vitejs/plugin-react';
 // `// @vitest-environment jsdom` as their first line.
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    // vite-plugin-pwa's virtual module only exists in the app build; tests get a stub (vi.mock can override it).
+    alias: { 'virtual:pwa-register/react': fileURLToPath(new URL('tests/helpers/pwa-register-stub.ts', import.meta.url)) },
+  },
   test: {
     environment: 'node',
     setupFiles: ['tests/setup.ts'],
