@@ -65,4 +65,23 @@ describe('buildMarkdownZip', () => {
     expect(text).toContain('labels: ["a: b", ok, "#x"]\n');
     expect(text).toContain('color: "#ff0000"\n');
   });
+  it('replaces backslashes in titles', () => {
+    expect(Object.keys(unzip(buildMarkdownZip({ notes: [note({ id: 'abcdef12-0', title: 'a\\x' })], journal: [] }, 'all')))).toEqual(['notes/abcdef12-a-x.md']);
+  });
+  it('sanitises the id prefix too', () => {
+    expect(Object.keys(unzip(buildMarkdownZip({ notes: [note({ id: 'ab/c\\d-0', title: 'T' })], journal: [] }, 'all')))).toEqual(['notes/ab-c-d-0-T.md']);
+  });
+  it('cuts to 40 code points before trimming trailing dots and spaces', () => {
+    const title = `${'x'.repeat(38)}.. tail`;
+    expect(Object.keys(unzip(buildMarkdownZip({ notes: [note({ id: 'abcdef12-0', title })], journal: [] }, 'all')))).toEqual([`notes/abcdef12-${'x'.repeat(38)}.md`]);
+    expect(Object.keys(unzip(buildMarkdownZip({ notes: [note({ id: 'abcdef12-0', title: 'name. . ' })], journal: [] }, 'all')))).toEqual(['notes/abcdef12-name.md']);
+  });
+  it('skips journal entries with invalid dates', () => {
+    const keys = Object.keys(unzip(buildMarkdownZip({ notes: [], journal: [j('../evil'), j('2026-13-01'), j('2026-02-30'), j('2026-11-5'), j('2026-11-05')] }, 'all')));
+    expect(keys).toEqual(['journal/2026-11-05.md']);
+  });
+  it('suffixes duplicate journal dates', () => {
+    const keys = Object.keys(unzip(buildMarkdownZip({ notes: [], journal: [j('2026-11-05'), j('2026-11-05'), j('2026-11-05')] }, 'all'))).sort();
+    expect(keys).toEqual(['journal/2026-11-05-2.md', 'journal/2026-11-05-3.md', 'journal/2026-11-05.md']);
+  });
 });

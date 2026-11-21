@@ -28,10 +28,17 @@ function yamlScalar(value: string): string {
   return plain || idLike ? value : JSON.stringify(value);
 }
 
-function sanitiseTitle(title: string): string {
+function sanitiseName(text: string, max: number): string {
+  const cut = Array.from(text).slice(0, max).join('');
   // eslint-disable-next-line no-control-regex
-  const cleaned = title.replace(/[/\:*?"<>|\u0000-\u001f\u007f]/g, '-').trim();
-  return Array.from(cleaned).slice(0, 40).join('');
+  return cut.replace(/[/\\:*?"<>|\u0000-\u001f\u007f]/g, '-').replace(/^\s+|[\s.]+$/g, '');
+}
+
+function validDate(date: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  if (!m) return false;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  return d.toISOString().slice(0, 10) === date;
 }
 
 function frontMatter(n: NoteLike): string {
@@ -57,8 +64,8 @@ export function buildMarkdownZip(data: { notes: NoteLike[]; journal: JournalLike
         memoLines.push(`- ${n.body.replace(/\r\n|\n|\r/g, ' ')}`);
         continue;
       }
-      const prefix = Array.from(n.id).slice(0, 8).join('');
-      const title = sanitiseTitle(n.title);
+      const prefix = sanitiseName(n.id, 8);
+      const title = sanitiseName(n.title, 40);
       const stem = title === '' ? prefix : `${prefix}-${title}`;
       let path = `notes/${stem}.md`;
       for (let i = 2; path in files; i += 1) path = `notes/${stem}-${i}.md`;
@@ -68,8 +75,10 @@ export function buildMarkdownZip(data: { notes: NoteLike[]; journal: JournalLike
   }
 
   for (const e of data.journal) {
-    if (e.deleted_at !== null) continue;
-    files[`journal/${e.date}.md`] = strToU8(e.body);
+    if (e.deleted_at !== null || !validDate(e.date)) continue;
+    let path = `journal/${e.date}.md`;
+    for (let i = 2; path in files; i += 1) path = `journal/${e.date}-${i}.md`;
+    files[path] = strToU8(e.body);
   }
 
   return zipSync(files);
