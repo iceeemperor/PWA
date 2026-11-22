@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { hasNoNul, isCalendarDate, isCreatedAt, isNonBlank } from '../data/validate-fields';
 import { isUuid } from '../domain/ids';
 import {
   BACKUP_FORMAT,
@@ -17,35 +18,37 @@ export const REFERENCES: Record<string, Record<string, string>> = {};
 
 const SUPPORTED_TABLES: readonly BackupTableKey[] = ['todos'];
 
-function isCalendarDate(s: string): boolean {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
-  if (!m) return false;
-  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  const date = new Date(0);
-  date.setUTCFullYear(y, mo - 1, d);
-  return date.getUTCFullYear() === y && date.getUTCMonth() === mo - 1 && date.getUTCDate() === d;
-}
-
 const datetime = z.iso.datetime({ offset: true });
 
-const stepSchema = z.strictObject({ id: z.string().min(1), text: z.string(), done: z.boolean() });
+const NO_NUL = 'must not contain the character U+0000';
+const text = () => z.string().refine(hasNoNul, NO_NUL);
 
-// Same rules as supabase core.sql and data/validate-fields.ts. user_id, rev and purged_at are never exported.
+const stepSchema = z.strictObject({ id: text().min(1), text: text(), done: z.boolean() });
+
+// Same rules as data/validate-fields.ts, push_change and the table CHECKs (F4). user_id, rev and purged_at are never
+// exported.
 const todoSchema = z.strictObject({
   id: z.string().refine(isUuid, 'must be a UUID'),
   kind: z.enum(['todo', 'goal']),
-  title: z.string().refine((s) => s.trim() !== '', 'must not be empty'),
+  title: text().refine(isNonBlank, 'must not be empty'),
   done: z.boolean(),
   priority: z.enum(['high', 'normal', 'low']),
   due_date: z.string().refine(isCalendarDate, 'must be a date in the form YYYY-MM-DD').nullable(),
-  note: z.string(),
+  note: text(),
   steps: z.array(stepSchema),
-  created_at: datetime,
+  created_at: datetime.refine(isCreatedAt, 'must lie between the years 2000 and 9999'),
   updated_at: datetime,
   deleted_at: datetime.nullable(),
 });
 
 const rowSchemas: Partial<Record<BackupTableKey, z.ZodType>> = { todos: todoSchema };
+
+/** Key names come from the file: long ones are cut so an error message stays readable. */
+const MAX_KEY_IN_MESSAGE = 40;
+export function keyName(k: string): string {
+  const chars = Array.from(k);
+  return chars.length > MAX_KEY_IN_MESSAGE ? `${chars.slice(0, MAX_KEY_IN_MESSAGE).join('')}…` : k;
+}
 
 function isObject(x: unknown): x is Record<string, unknown> {
   return typeof x === 'object' && x !== null && !Array.isArray(x);
@@ -83,7 +86,7 @@ function validate(input: unknown): ValidationResult {
   const known: readonly string[] = BACKUP_TABLE_KEYS;
 
   for (const key of Object.keys(tables)) {
-    if (!known.includes(key) && push(`tables.${key}: unknown table.`)) return fail(errors);
+    if (!known.includes(key) && push(`tables.${keyName(key)}: unknown table.`)) return fail(errors);
   }
 
   const clean = {} as Record<BackupTableKey, Record<string, unknown>[]>;
@@ -110,7 +113,7 @@ function validate(input: unknown): ValidationResult {
         for (const issue of parsed.error.issues) {
           const path = issue.path.map(String).join('.');
           const where = `${key}[${i}]` + (path ? `.${path}` : '');
-          const what = issue.code === 'unrecognized_keys' ? `unknown field(s) ${issue.keys.join(', ')}` : issue.message;
+          const what = issue.code === 'unrecognized_keys' ? `unknown field(s) ${issue.keys.map(keyName).join(', ')}` : issue.message;
           if (push(`${where}: ${what}`)) return fail(errors);
         }
         continue;

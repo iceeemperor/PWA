@@ -118,3 +118,14 @@ describe('validateBackup round trip', () => {
     expect(r.ok).toBe(true);
   });
 });
+
+describe('validateBackup: file-controlled key names in messages (F4, Task 12 minor 1)', () => {
+  it('cuts unknown table and field names to 40 characters', () => {
+    const long = 'k'.repeat(500);
+    const file = { ...withTodo({ [long]: 1 }), tables: { ...withTodo({ [long]: 1 }).tables, [long]: [] } };
+    const errors = errorsOf(validateBackup(file));
+    expect(errors.length).toBeGreaterThanOrEqual(2);
+    for (const e of errors) expect(e.length).toBeLessThan(120);
+    expect(errors.some((e) => e.includes(`${'k'.repeat(40)}…`))).toBe(true);
+  });
+});
