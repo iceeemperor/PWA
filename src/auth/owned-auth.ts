@@ -10,6 +10,8 @@ export function createOwnedAuth(inner: SupabaseAuth, owner: OwnerStore): Supabas
   let userId: string | null = null;
   // Set while this wrapper signs a refused user out again, so that sign-out is not taken as the user's own.
   let refusing = false;
+  // Set while an explicit signOut() already recorded and announced the sign-out, so its SIGNED_OUT event adds nothing.
+  let signOutAnnounced = false;
   const listeners = new Set<(s: SessionChange) => void>();
   const inflight = new Map<string, Promise<AdoptResult>>();
 
@@ -48,6 +50,7 @@ export function createOwnedAuth(inner: SupabaseAuth, owner: OwnerStore): Supabas
     if (s.userId === null) {
       if (refusing) return;
       userId = null;
+      if (signOutAnnounced) return;
       if (!s.expired) owner.signedOut().catch((e: unknown) => console.error('Could not record the sign-out', e));
       emit(s);
       return;
@@ -90,7 +93,25 @@ export function createOwnedAuth(inner: SupabaseAuth, owner: OwnerStore): Supabas
       return r;
     },
 
-    signOut: () => inner.signOut(),
+    async signOut() {
+      // Record it first: the auth call can take ~25 s offline with an expired token, and an app closed meanwhile
+      // must not reopen as the signed-in owner. The UI leaves at once too, instead of looking dead.
+      try {
+        await owner.signedOut();
+      } catch (e) {
+        console.error('Could not record the sign-out', e);
+      }
+      if (userId !== null) {
+        userId = null;
+        signOutAnnounced = true;
+        emit({ userId: null, expired: false });
+      }
+      try {
+        await inner.signOut();
+      } finally {
+        signOutAnnounced = false;
+      }
+    },
 
     getUserId: () => userId,
 

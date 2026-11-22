@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { AuthRetryableFetchError, type SupabaseClient } from '@supabase/supabase-js';
+import { createSupabaseAuth } from '../../src/auth/auth';
 import { createOwnedAuth } from '../../src/auth/owned-auth';
 import { openLocalDb, type LocalDb } from '../../src/data/local-db';
 import { createOwnerStore, OWNER_SIGNED_IN, OWNER_USER_ID } from '../../src/data/owner';
@@ -131,5 +133,60 @@ describe('account switch on one browser (F3)', () => {
     expect(await auth.signIn('b@b.c', 'pw')).toEqual({ ok: true });
     expect(await db.raw.getAll('todos')).toHaveLength(1);
     expect(await db.getMeta(OWNER_USER_ID)).toBe(B);
+  });
+});
+
+describe('sign-out is recorded before the slow auth call (bug: closed during a ~25 s offline sign-out)', () => {
+  /** An inner whose signOut hangs until released, like auth-js offline with an expired token. */
+  async function withSlowSignOut() {
+    const s = await setup({ initial: A });
+    let release!: () => void;
+    const slow = new Promise<void>((r) => (release = r));
+    const realSignOut = s.inner.signOut.bind(s.inner);
+    s.inner.signOut = async () => {
+      await slow;
+      await realSignOut();
+    };
+    return { ...s, release };
+  }
+
+  it('the flag is false and the app is told before inner.signOut resolves', async () => {
+    const { db, owner, auth, release } = await withSlowSignOut();
+    const seen: unknown[] = [];
+    auth.onSessionChange((x) => seen.push(x));
+    const p = auth.signOut();
+    await vi.waitFor(async () => expect(await db.getMeta(OWNER_SIGNED_IN)).toBe(false));
+    expect(await owner.signedInOwner()).toBeNull();
+    expect(auth.getUserId()).toBeNull();
+    expect(seen).toEqual([{ userId: null, expired: false }]);
+    release();
+    await p;
+    await new Promise((r) => setTimeout(r, 0));
+    expect(seen).toEqual([{ userId: null, expired: false }]); // the later SIGNED_OUT event adds nothing
+  });
+
+  it('a fresh offline boot after that does not open as the owner', async () => {
+    const { owner, auth } = await withSlowSignOut();
+    void auth.signOut(); // never released: the app is closed during the wait
+    await vi.waitFor(async () => expect(await owner.signedInOwner()).toBeNull());
+    const offline = {
+      auth: {
+        getSession: async () => ({ data: { session: null }, error: new AuthRetryableFetchError('Failed to fetch', 0) }),
+        onAuthStateChange: () => ({ data: { subscription: { unsubscribe() {} } } }),
+      },
+    } as unknown as SupabaseClient;
+    const boot = createSupabaseAuth(offline, { offlineUserId: () => owner.signedInOwner(), readyTimeoutMs: 50 });
+    await boot.ready;
+    expect(boot.getUserId()).toBeNull();
+  });
+
+  it('still signs out when recording fails', async () => {
+    const { owner, inner, auth } = await setup({ initial: A });
+    owner.signedOut = async () => {
+      throw new Error('disk full');
+    };
+    await auth.signOut();
+    expect(inner.getUserId()).toBeNull();
+    expect(auth.getUserId()).toBeNull();
   });
 });
