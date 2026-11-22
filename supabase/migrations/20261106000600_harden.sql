@@ -242,3 +242,9 @@ $$;
 
 revoke execute on function push_change(text, jsonb) from public, anon, authenticated;
 grant execute on function push_change(text, jsonb) to authenticated;
+
+-- F5: no direct writes to synced tables. With INSERT/UPDATE, a signed-in user's own token could write any row
+-- straight through PostgREST and skip every push_change rule (a direct update could clear purged_at and bring a
+-- tombstone back). The app only writes through push_change and import_backup, which are security definer; SELECT
+-- stays for pull_changes (security invoker). The RLS policies stay as well (spec 3.3), as a second line of defence.
+revoke insert, update on todos from authenticated;

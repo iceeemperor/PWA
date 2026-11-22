@@ -34,12 +34,23 @@ async function upd(uid: string, id: string, fields: Row): Promise<Row | undefine
   return r.rows[0];
 }
 
+/**
+ * F5: signed-in users have no INSERT or UPDATE on todos (every write goes through the security definer functions).
+ * The trigger, RLS and constraint tests below grant them back, as a mistaken grant would, to show that the trigger,
+ * the policies (spec 3.3) and the CHECKs still hold as a second line of defence.
+ */
+async function grantDirectWritesByMistake(): Promise<void> {
+  await t.asRole('postgres');
+  await t.pg.exec('grant insert, update on todos to authenticated');
+}
+
 async function rows(uid: string): Promise<Row[]> {
   await t.asUser(uid);
   return (await t.pg.query<Row>('select * from todos order by rev')).rows;
 }
 
 describe('todos: server-managed columns', () => {
+  beforeEach(grantDirectWritesByMistake);
   it('rev comes from one shared sequence and increases on every write', async () => {
     const a = await ins(A, {}); const b = await ins(A, {}); await upd(A, a.id, { done: true });
     const r = await rows(A); expect(r.find(x => x.id === a.id)!.rev).toBeGreaterThan(b.rev);
@@ -74,6 +85,7 @@ describe('todos: server-managed columns', () => {
 });
 
 describe('todos: row-level security', () => {
+  beforeEach(grantDirectWritesByMistake);
   it('a user cannot insert a row owned by someone else', async () => expect(ins(A, { user_id: B })).rejects.toThrow(/row-level security/));
   it('a user cannot read or update another user\'s rows', async () => {
     const x = await ins(A, {}); expect(await rows(B)).toHaveLength(0); expect(await upd(B, x.id, { done: true })).toBeUndefined();
@@ -123,6 +135,7 @@ describe('todos: row-level security', () => {
 });
 
 describe('todos: constraints', () => {
+  beforeEach(grantDirectWritesByMistake);
   it('title must be non-empty unless purged_at is set', async () => {
     await expect(ins(A, { title: '' })).rejects.toThrow(/check constraint/);
     await expect(ins(A, { title: '', purged_at: new Date().toISOString() })).resolves.toBeDefined();
@@ -204,15 +217,32 @@ describe('privileges', () => {
   const can = async (role: string, priv: string, table: string) =>
     (await t.pg.query<{ ok: boolean }>('select has_table_privilege($1, $2, $3) as ok', [role, `public.${table}`, priv])).rows[0].ok;
 
-  it('authenticated may select, insert and update todos, and nothing else', async () => {
-    for (const priv of ['select', 'insert', 'update']) expect(await can('authenticated', priv, 'todos'), priv).toBe(true);
-    for (const priv of ['delete', 'truncate', 'references', 'trigger']) expect(await can('authenticated', priv, 'todos'), priv).toBe(false);
+  it('authenticated may only select todos (F5: no direct insert or update; writes go through the functions)', async () => {
+    expect(await can('authenticated', 'select', 'todos'), 'select').toBe(true);
+    for (const priv of ['insert', 'update', 'delete', 'truncate', 'references', 'trigger']) expect(await can('authenticated', priv, 'todos'), priv).toBe(false);
+  });
+  it('a direct insert or update by a signed-in user is denied, so a tombstone cannot be brought back outside import (F5)', async () => {
+    await t.asUser(A);
+    const op = { op_id: randomUUID(), id: randomUUID(), kind: 'insert', base_rev: null, fields: { title: 'mine' } };
+    const r = (await t.pg.query<{ r: Row }>('select push_change($1, $2::jsonb) as r', ['todos', JSON.stringify(op)])).rows[0].r;
+    expect(r.status).toBe('applied');
+    await t.asRole('postgres');
+    await t.pg.query(`update todos set purged_at = now(), deleted_at = now(), title = '' where id = $1`, [op.id]);
+    await t.asUser(A);
+    await expect(t.pg.query(`insert into todos (id, title) values ($1, 'x')`, [randomUUID()])).rejects.toThrow(/permission denied for table todos/);
+    await expect(t.pg.query(`insert into todos (id, user_id, title) values ($1, $2, 'x')`, [randomUUID(), A])).rejects.toThrow(/permission denied for table todos/);
+    await expect(t.pg.query(`update todos set purged_at = null, title = 'resurrected' where id = $1`, [op.id])).rejects.toThrow(/permission denied for table todos/);
+    await expect(t.pg.query(`update todos set steps = '"direct"' where id = $1`, [op.id])).rejects.toThrow(/permission denied for table todos/);
+    expect(await rowOf(t, op.id)).toMatchObject({ title: '', purged_at: expect.any(Date) });
+    // Reading stays: pull_changes is security invoker and needs SELECT.
+    expect((await t.pg.query('select id from todos')).rows).toHaveLength(1);
   });
   it('anon has no privilege on any table', async () => {
     for (const table of ['todos', 'applied_ops', 'sync_tables'])
       for (const priv of ['select', 'insert', 'update', 'delete', 'truncate', 'references', 'trigger']) expect(await can('anon', priv, table), `${table} ${priv}`).toBe(false);
   });
   it('signed-in users cannot truncate todos or applied_ops, and anon cannot truncate todos', async () => {
+    await grantDirectWritesByMistake();
     const x = await ins(A, {});
     await t.asRole('postgres');
     await t.pg.query(`insert into applied_ops (user_id, op_id, result) values ($1, $2, '{}')`, [A, randomUUID()]);
@@ -277,7 +307,7 @@ describe('migration on a project with the old default grants', () => {
         'rev_seq authenticated': await granted('has_sequence_privilege', 'authenticated', 'rev_seq', seqPrivs),
         'rev_seq anon': await granted('has_sequence_privilege', 'anon', 'rev_seq', seqPrivs),
       }).toEqual({
-        'todos authenticated': ['select', 'insert', 'update'],
+        'todos authenticated': ['select'],
         'todos anon': [],
         'applied_ops authenticated': [],
         'applied_ops anon': [],
