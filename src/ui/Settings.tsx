@@ -42,6 +42,23 @@ async function syncBestEffort(engine: Services['engine']): Promise<void> {
   }
 }
 
+/**
+ * How long the export click waits for its sync. navigator.share needs the click's transient user activation, which
+ * WebKit lets expire quickly; a slow or hanging sync must not use it up. Settings also syncs on mount, so the click
+ * usually finds the data fresh already.
+ */
+export const PRE_EXPORT_SYNC_MS = 1500;
+
+/** syncBestEffort, but gives up waiting after `ms`. The timer is cleared when the sync settles first. */
+async function syncBounded(engine: Services['engine'], ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([syncBestEffort(engine), new Promise<void>((resolve) => (timer = setTimeout(resolve, ms)))]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export interface SettingsProps {
   services: Services;
 }
@@ -55,6 +72,11 @@ export function Settings({ services }: SettingsProps) {
   const [importView, setImportView] = useState<ImportView | null>(null);
   const [failed, setFailed] = useState<QueuedOp[]>([]);
   const [failedLoaded, setFailedLoaded] = useState(false);
+
+  // Freshen the local data while the user reads the page, so the export click has little left to wait for.
+  useEffect(() => {
+    void syncBestEffort(engine);
+  }, [engine]);
 
   useEffect(() => {
     let live = true;
@@ -84,8 +106,9 @@ export function Settings({ services }: SettingsProps) {
     setBusy('json');
     setExportMsg(null);
     try {
-      // Best effort first, so the backup includes what other devices pushed (spec 7.1 exports the local database).
-      await syncBestEffort(engine);
+      // Best effort first, so the backup includes what other devices pushed (spec 7.1 exports the local database),
+      // but bounded so the share sheet still gets the click's user activation.
+      await syncBounded(engine, PRE_EXPORT_SYNC_MS);
       const backup = await buildBackup(db);
       const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
       const how = await saveFile(`productivity-app-backup-${today()}.json`, blob);

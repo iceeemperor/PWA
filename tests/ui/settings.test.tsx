@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import type { Services } from '../../src/app/services';
@@ -9,7 +9,7 @@ import { BACKUP_FORMAT, BACKUP_VERSION, type ImportSummary, type QueuedOp } from
 import { CloudError } from '../../src/sync/cloud';
 import type { SyncReport } from '../../src/sync/engine';
 import { ExportReminder } from '../../src/ui/ExportReminder';
-import { Settings } from '../../src/ui/Settings';
+import { PRE_EXPORT_SYNC_MS, Settings } from '../../src/ui/Settings';
 import { Shell } from '../../src/ui/Shell';
 import { createTestServices, offlineCloud } from '../helpers/ui-services';
 
@@ -154,6 +154,37 @@ describe('Settings: edges', () => {
     await clickText('导出完整备份');
     expect(await screen.findByText(/导出失败/)).toBeInTheDocument();
     expect(await db.getMeta('last_export_at')).toBeUndefined();
+  });
+
+  it('mounting Settings starts one best-effort sync', async () => {
+    engine.sync.mockRejectedValue(new Error('offline'));
+    renderSettings();
+    await screen.findByText('导出完整备份');
+    expect(engine.sync).toHaveBeenCalledTimes(1);
+  });
+
+  it('a sync that never resolves does not block the export: the file is saved after about 1500 ms', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime('2026-11-05T00:00:00Z');
+    engine.sync.mockReturnValue(new Promise(() => {}));
+    renderSettings();
+    fireEvent.click(screen.getByRole('button', { name: '导出完整备份' }));
+    await vi.advanceTimersByTimeAsync(PRE_EXPORT_SYNC_MS - 100);
+    expect(saveFile).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(100);
+    await vi.waitFor(() => expect(saveFile).toHaveBeenCalledWith('productivity-app-backup-2026-11-05.json', expect.any(Blob)));
+    // Advancing the fake timers moves the frozen clock too.
+    await vi.waitFor(async () => expect(await db.getMeta('last_export_at')).toBe('2026-11-05T00:00:01.500Z'));
+  });
+
+  it('a sync that wins the race leaves no timer behind', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime('2026-11-05T00:00:00Z');
+    renderSettings();
+    fireEvent.click(screen.getByRole('button', { name: '导出完整备份' }));
+    await vi.waitFor(() => expect(saveFile).toHaveBeenCalled());
+    await vi.waitFor(async () => expect(await db.getMeta('last_export_at')).toBeDefined());
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('export tolerates a sync that resolves offline', async () => {
