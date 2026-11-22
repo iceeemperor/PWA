@@ -10,7 +10,7 @@
 | `supabase db push --remote`（000100–000400、000600） | 通过 |
 | pg_cron 可用（免费版） | 可用：`pg_available_extensions` 有 `pg_cron`；`cron.schedule` 成功；`cron.job` 有 `purge-expired` / `0 3 * * *`。保留 `.cron.sql`，不设 `VITE_PURGE_ON_START`。 |
 | 构建变量 | `VITE_SUPABASE_URL`、`VITE_SUPABASE_ANON_KEY`、`NODE_VERSION=22`，放在**构建变量**里（Workers 静态资源不支持运行时变量；Vite 在构建时写入）。 |
-| 注册与匿名登录关闭（curl 验证） | 待验证：用 `probe@example.com` 测得 `email_address_invalid`（保留域名被先拦下），证明不了注册已关闭，需要用控制台设置和匿名登录请求确认 |
+| 注册与匿名登录关闭（curl 验证） | 通过：匿名登录返回 422 `anonymous_provider_disabled`；用本人邮箱别名注册返回 `signup_disabled`（Signups not allowed for this instance）。（第一次用 `probe@example.com` 只得到 `email_address_invalid`，不算数。） |
 
 ## 真机检查（计划任务 17 第 5 步）
 
@@ -25,3 +25,11 @@
 | 7 | 清除浏览器数据后重新登录，数据完整，云端没减少 | 通过 |
 | 8 | 重新部署后旧页面出现「更新」按钮 | 通过 |
 | 9 | 无痕窗口：提示无法保存，或能用但关闭后本机数据不保留 | 通过（Windows Chrome）：无痕窗口可用，写入的内容同步到云端；关闭所有无痕窗口后再开新的，要求重新登录，本机数据不保留。iPhone 无痕模式未测。 |
+
+## 备注
+
+- 无痕窗口登录后写入的内容会照常同步到云端和其他设备（它就是另一台设备）；只有这个窗口里的本机副本会在关闭后清空。这是设计如此。
+
+## 结论
+
+阶段 1 验证完成（2026-11-22）。没测的项：iPhone 无痕模式；两台设备改同一条的不同字段（阶段 2 有编辑界面后实测）。
