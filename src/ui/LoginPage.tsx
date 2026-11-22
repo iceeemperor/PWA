@@ -1,11 +1,16 @@
 import { useState, type FormEvent } from 'react';
 import type { AuthApi, SignInResult } from '../auth/auth';
 
-const FAILURE_TEXT: Record<Exclude<SignInResult, { ok: true }>['reason'], string> = {
+const FAILURE_TEXT: Record<Exclude<Exclude<SignInResult, { ok: true }>['reason'], 'other_account'>, string> = {
   invalid_credentials: '邮箱或密码不对',
   network: '网络连接失败，请检查网络后重试',
   unknown: '登录失败，请稍后再试',
 };
+
+function failureText(r: Exclude<SignInResult, { ok: true }>): string {
+  if (r.reason === 'other_account') return `此设备上还有另一个账号的 ${r.pending} 项未同步改动，请先用原账号登录完成同步`;
+  return FAILURE_TEXT[r.reason];
+}
 
 export interface LoginPageProps {
   auth: AuthApi;
@@ -29,7 +34,7 @@ export function LoginPage({ auth, expired, onSignedIn }: LoginPageProps) {
     const r = await auth.signIn(email.trim(), password);
     setBusy(false);
     if (r.ok) onSignedIn?.();
-    else setError(FAILURE_TEXT[r.reason]);
+    else setError(failureText(r));
   }
 
   return (

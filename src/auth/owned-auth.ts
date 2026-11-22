@@ -85,7 +85,7 @@ export function createOwnedAuth(inner: SupabaseAuth, owner: OwnerStore): Supabas
       } catch {
         return { ok: false, reason: 'unknown' };
       }
-      if (!v.ok) return { ok: false, reason: 'unknown' };
+      if (!v.ok) return { ok: false, reason: 'other_account', pending: v.pending };
       userId = id;
       return r;
     },

@@ -1,6 +1,12 @@
 import { isAuthApiError, isAuthRetryableFetchError, type Session, type SupabaseClient } from '@supabase/supabase-js';
 
-export type SignInResult = { ok: true } | { ok: false; reason: 'invalid_credentials' | 'network' | 'unknown' };
+export type SignInResult =
+  | { ok: true }
+  | { ok: false; reason: 'invalid_credentials' | 'network' | 'unknown' }
+  /** The account is not this device's owner and the owner still has `pending` ops queued here (F3). */
+  | { ok: false; reason: 'other_account'; pending: number };
+
+type CredentialFailure = 'invalid_credentials' | 'network' | 'unknown';
 
 export interface SessionChange {
   userId: string | null;
@@ -36,7 +42,7 @@ export interface SupabaseAuth extends AuthApi {
   ready: Promise<void>;
 }
 
-function classify(error: unknown): Exclude<SignInResult, { ok: true }>['reason'] {
+function classify(error: unknown): CredentialFailure {
   if (isAuthApiError(error)) {
     if ((error.status === 400 && error.code === 'invalid_credentials') || error.message === 'Invalid login credentials') {
       return 'invalid_credentials';

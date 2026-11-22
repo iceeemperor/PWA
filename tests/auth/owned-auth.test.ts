@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { createOwnedAuth } from '../../src/auth/owned-auth';
 import { openLocalDb, type LocalDb } from '../../src/data/local-db';
 import { createOwnerStore, OWNER_SIGNED_IN, OWNER_USER_ID } from '../../src/data/owner';
+import { createRepo } from '../../src/data/repo';
+import type { QueuedOp } from '../../src/domain/types';
 import { createFakeAuth } from '../helpers/fake-auth';
 
 let n = 0;
@@ -61,5 +63,73 @@ describe('owner tracking (F1)', () => {
     await auth.signIn('a@b.c', 'pw');
     await vi.waitFor(() => expect(seen).toHaveLength(1));
     expect(seen[0]).toBe(`${A}:${A}`);
+  });
+});
+
+const B = '00000000-0000-4000-8000-00000000000b';
+
+describe('account switch on one browser (F3)', () => {
+  async function asOwnerA() {
+    const s = await setup({ initial: A });
+    const repo = createRepo(s.db, { userId: () => A });
+    return { ...s, repo };
+  }
+
+  it('the same user signing in again keeps everything', async () => {
+    const { db, inner, auth, repo } = await asOwnerA();
+    await repo.create('todos', { title: 'mine' });
+    await auth.signOut();
+    inner.setSignInUser(A);
+    expect(await auth.signIn('a@b.c', 'pw')).toEqual({ ok: true });
+    expect(await repo.pendingCount()).toBe(1);
+    expect(await db.getMeta(OWNER_USER_ID)).toBe(A);
+  });
+
+  it('another user with an empty queue: local records, cursor and export date are wiped, db_id kept, new owner set', async () => {
+    const { db, inner, auth } = await asOwnerA();
+    // A's synced record and cursor (nothing queued).
+    await db.raw.put('todos', { id: 'r1', user_id: A, title: 'A private', rev: 5, deleted_at: null, purged_at: null });
+    await db.setMeta('cursor', 5);
+    await db.setMeta('last_export_at', '2026-11-01T00:00:00.000Z');
+    const dbId = await db.getMeta('db_id');
+    await auth.signOut();
+    inner.setSignInUser(B);
+    expect(await auth.signIn('b@b.c', 'pw')).toEqual({ ok: true });
+    expect(auth.getUserId()).toBe(B);
+    expect(await db.raw.getAll('todos')).toEqual([]);
+    expect(await db.raw.getAll('queue')).toEqual([]);
+    expect(await db.getMeta('cursor')).toBe(0);
+    expect(await db.getMeta('last_export_at')).toBeUndefined();
+    expect(await db.getMeta('db_id')).toBe(dbId);
+    expect(await db.getMeta(OWNER_USER_ID)).toBe(B);
+    expect(await db.getMeta(OWNER_SIGNED_IN)).toBe(true);
+  });
+
+  it('another user while the queue holds ops (pending or failed): refused and signed out again, nothing touched', async () => {
+    const { db, inner, auth, repo } = await asOwnerA();
+    const r = await repo.create('todos', { title: 'unsynced' });
+    const [op] = (await db.raw.getAll('queue')) as QueuedOp[];
+    const { seq: _seq, ...rest } = op;
+    await db.raw.add('queue', { ...rest, op_id: 'failed-one', failed: { reason: 'x' } });
+    await auth.signOut();
+    const seen: unknown[] = [];
+    auth.onSessionChange((s) => seen.push(s));
+    inner.setSignInUser(B);
+    expect(await auth.signIn('b@b.c', 'pw')).toEqual({ ok: false, reason: 'other_account', pending: 2 });
+    expect(auth.getUserId()).toBeNull();
+    expect(inner.getUserId()).toBeNull();
+    expect(seen).not.toContainEqual(expect.objectContaining({ userId: B }));
+    expect(await repo.get('todos', r.id)).toBeDefined();
+    expect(await db.raw.getAll('queue')).toHaveLength(2);
+    expect(await db.getMeta(OWNER_USER_ID)).toBe(A);
+  });
+
+  it('a sign-in with no owner stored adopts the user', async () => {
+    const { db, inner, auth } = await setup();
+    await db.raw.put('todos', { id: 'legacy', user_id: B, title: 'kept', rev: 1, deleted_at: null, purged_at: null });
+    inner.setSignInUser(B);
+    expect(await auth.signIn('b@b.c', 'pw')).toEqual({ ok: true });
+    expect(await db.raw.getAll('todos')).toHaveLength(1);
+    expect(await db.getMeta(OWNER_USER_ID)).toBe(B);
   });
 });

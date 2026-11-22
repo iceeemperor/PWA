@@ -66,6 +66,16 @@ describe('App: login and session (brief)', () => {
     expect(await repo.pendingCount()).toBe(1);
   });
 
+  it('a sign-in refused because another account has unsynced changes here says so (F3)', async () => {
+    auth = createFakeAuth(null);
+    render(<App services={{ ...services, auth }} />);
+    await screen.findByLabelText('邮箱');
+    auth.setSignInResult({ ok: false, reason: 'other_account', pending: 3 });
+    await submitLogin();
+    expect(await screen.findByText('此设备上还有另一个账号的 3 项未同步改动，请先用原账号登录完成同步')).toBeInTheDocument();
+    expect(screen.queryByText('退出登录')).not.toBeInTheDocument();
+  });
+
   it('a session refused at start shows the expiry notice on the login page (F1)', async () => {
     const refused = Object.assign(createFakeAuth(null), { expiredAtStart: () => true });
     render(<App services={{ ...services, auth: refused }} />);
