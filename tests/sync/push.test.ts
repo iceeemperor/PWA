@@ -15,6 +15,8 @@ import {
 import { createDevice, type Device } from '../helpers/device';
 import { createFlakyCloud, type FlakyCloud } from '../helpers/flaky-cloud';
 import { createPgliteCloud } from '../helpers/pglite-cloud';
+import { createSupabaseCloud } from '../../src/sync/supabase-cloud';
+import type { CloudClient } from '../../src/sync/cloud';
 
 const U = TEST_USER_A;
 
@@ -585,5 +587,41 @@ describe('sync(): a call during a run gets a follow-up run (F2)', () => {
     expect(await late).toMatchObject({ outcome: 'offline' });
     expect(await first).toMatchObject({ outcome: 'offline' });
     expect(flaky.push).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('push: an offline fetch failure as postgrest-js reports it (iPhone field bug)', () => {
+  /** The pglite cloud, except that while `offline.on` push goes through createSupabaseCloud and a dead fetch. */
+  function phoneCloud(online: CloudClient, offline: { on: boolean }): CloudClient {
+    const dead = createSupabaseCloud({
+      rpc: async () => ({
+        error: { message: 'TypeError: Load failed', details: '', hint: '', code: '' },
+        data: null,
+        count: null,
+        status: 0,
+        statusText: '',
+      }),
+    } as any);
+    return {
+      push: (op) => (offline.on ? dead.push(op) : online.push(op)),
+      pull: (s, l) => (offline.on ? dead.pull(s, l) : online.pull(s, l)),
+      purgeExpired: () => online.purgeExpired(),
+      importBackup: (p, r) => online.importBackup(p, r),
+    };
+  }
+
+  it('an offline push keeps the op pending, not failed, and a later sync pushes it', async () => {
+    const offline = { on: true };
+    const d = await createDevice({ name: 'phone', cloud: phoneCloud(createPgliteCloud(t, U), offline), userId: U });
+    opened.push(d.db);
+    const r = await d.repo.create('todos', { title: 'offline edit' });
+    expect(await d.engine.sync()).toMatchObject({ outcome: 'offline', pushed: 0, failed: 0 });
+    expect(await d.repo.failedOps()).toEqual([]);
+    expect(await d.repo.pendingCount()).toBe(1);
+
+    offline.on = false;
+    expect(await d.engine.sync()).toMatchObject({ outcome: 'ok', pushed: 1, failed: 0 });
+    expect(await d.repo.pendingCount()).toBe(0);
+    expect((await rowOf(t, r.id)).title).toBe('offline edit');
   });
 });

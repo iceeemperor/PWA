@@ -1,4 +1,4 @@
-import { AuthApiError, AuthRetryableFetchError, type AuthChangeEvent, type Session, type SupabaseClient } from '@supabase/supabase-js';
+import { AuthApiError, AuthError, AuthRetryableFetchError, type AuthChangeEvent, type Session, type SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 import { createSupabaseAuth } from '../../src/auth/auth';
 
@@ -43,6 +43,8 @@ describe('createSupabaseAuth: signIn', () => {
     ['invalid_credentials by message', new AuthApiError('Invalid login credentials', 400, undefined), 'invalid_credentials'],
     ['retryable fetch error', new AuthRetryableFetchError('Failed to fetch', 0), 'network'],
     ['TypeError', new TypeError('Failed to fetch'), 'network'],
+    ['Safari offline retryable fetch error', new AuthRetryableFetchError('Load failed', 0), 'network'],
+    ['status-0 auth error', new AuthError('Load failed', 0, undefined), 'network'],
     ['other api error', new AuthApiError('Email not confirmed', 400, 'email_not_confirmed'), 'unknown'],
     ['server error', new AuthApiError('boom', 500, 'unexpected_failure'), 'unknown'],
   ] as const)('maps %s', async (_n, error, reason) => {

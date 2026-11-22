@@ -108,3 +108,55 @@ describe('getSupabase', () => {
     expect(getSupabase()).toBe(getSupabase());
   });
 });
+
+// What postgrest-js resolves (it does not throw) when fetch itself fails: status 0 and the browser's TypeError text.
+function fetchFailure(message: string) {
+  return {
+    error: { message, details: 'TypeError: ' + message, hint: '', code: '' },
+    data: null,
+    count: null,
+    status: 0,
+    statusText: '',
+  };
+}
+
+describe('createSupabaseCloud: a fetch failure postgrest-js resolves with status 0', () => {
+  it.each([
+    ['Safari', 'TypeError: Load failed'],
+    ['Chrome', 'TypeError: Failed to fetch'],
+    ['Firefox', 'TypeError: NetworkError when attempting to fetch resource.'],
+  ])('%s: push and pull reject with a network CloudError', async (_browser, message) => {
+    const rpc = vi.fn().mockResolvedValue(fetchFailure(message));
+    const c = createSupabaseCloud({ rpc } as any);
+    const pushed = await c.push(op).then(() => null, (e: unknown) => e);
+    expect(pushed).toBeInstanceOf(CloudError);
+    expect((pushed as CloudError).kind).toBe('network');
+    await expect(c.pull(0, 10)).rejects.toMatchObject({ kind: 'network' });
+  });
+
+  it('status 0 is network whatever the message', async () => {
+    const rpc = vi.fn().mockResolvedValue({ ...fetchFailure('AbortError: signal is aborted without reason'), status: 0 });
+    await expect(createSupabaseCloud({ rpc } as any).push(op)).rejects.toMatchObject({ kind: 'network' });
+    expect(mapSupabaseError({ status: 0, message: 'something odd' }).kind).toBe('network');
+  });
+});
+
+describe('mapSupabaseError: fetch failures without a status', () => {
+  it.each([
+    'TypeError: Load failed',
+    'Load failed',
+    'Failed to fetch',
+    'NetworkError when attempting to fetch resource.',
+    'Network request failed',
+    'AbortError: The operation was aborted.',
+    'TimeoutError: signal timed out',
+  ])('%s is network', (message) => expect(mapSupabaseError({ message, code: '' }).kind).toBe('network'));
+
+  it('an AbortError or TimeoutError by name is network', () => {
+    expect(mapSupabaseError(new DOMException('aborted', 'AbortError')).kind).toBe('network');
+    expect(mapSupabaseError({ name: 'TimeoutError', message: 'x' }).kind).toBe('network');
+  });
+
+  it('a 400 that mentions a fetch word is not network', () =>
+    expect(mapSupabaseError({ status: 400, message: 'failed to fetch the row' }).kind).toBe('rejected'));
+});

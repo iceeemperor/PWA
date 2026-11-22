@@ -6,6 +6,18 @@ interface ErrorLike {
   status?: unknown;
   code?: unknown;
   message?: unknown;
+  name?: unknown;
+}
+
+/**
+ * The texts browsers give a fetch that never got a response (Safari, Chrome, Firefox, React Native), and the
+ * abort/timeout names. postgrest-js turns such a failure into `{ message: "TypeError: Load failed", status: 0 }`.
+ */
+export const NETWORK_ERROR_PATTERN = /load failed|failed to fetch|networkerror|network request failed|aborterror|timeouterror/i;
+
+/** True when the text reads like a request that never reached the server (for example a stored failure reason). */
+export function isNetworkLikeMessage(message: string): boolean {
+  return NETWORK_ERROR_PATTERN.test(message);
 }
 
 /**
@@ -18,10 +30,21 @@ export function mapSupabaseError(e: unknown): CloudError {
   const status = typeof err.status === 'number' ? err.status : undefined;
   const code = typeof err.code === 'string' ? err.code : '';
   const message = typeof err.message === 'string' ? err.message : e instanceof Error ? e.message : String(e);
+  const name = typeof err.name === 'string' ? err.name : '';
   const lower = message.toLowerCase();
   const make = (kind: CloudError['kind']) => new CloudError(kind, message, { cause: e });
 
-  if (e instanceof TypeError || (status === undefined && (lower.includes('fetch') || lower.includes('network')))) {
+  // Status 0: postgrest-js resolved a fetch that got no response at all (offline, dropped, aborted).
+  if (status === 0) return make('network');
+  if (
+    e instanceof TypeError ||
+    (status === undefined &&
+      (name === 'AbortError' ||
+        name === 'TimeoutError' ||
+        isNetworkLikeMessage(message) ||
+        lower.includes('fetch') ||
+        lower.includes('network')))
+  ) {
     return make('network');
   }
   if (

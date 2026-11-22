@@ -1,4 +1,4 @@
-import { isAuthApiError, isAuthRetryableFetchError, type Session, type SupabaseClient } from '@supabase/supabase-js';
+import { isAuthApiError, isAuthError, isAuthRetryableFetchError, type Session, type SupabaseClient } from '@supabase/supabase-js';
 
 export type SignInResult =
   | { ok: true }
@@ -43,6 +43,8 @@ export interface SupabaseAuth extends AuthApi {
 }
 
 function classify(error: unknown): CredentialFailure {
+  // Status 0: the request got no response (auth-js reports an offline fetch that way).
+  if (isAuthError(error) && error.status === 0) return 'network';
   if (isAuthApiError(error)) {
     if ((error.status === 400 && error.code === 'invalid_credentials') || error.message === 'Invalid login credentials') {
       return 'invalid_credentials';
@@ -57,7 +59,7 @@ type AuthClient = Pick<SupabaseClient, 'auth'>;
 
 /** A failure to reach the auth server, as opposed to the server refusing the session. */
 function isNetworkError(error: unknown): boolean {
-  return isAuthRetryableFetchError(error) || error instanceof TypeError;
+  return isAuthRetryableFetchError(error) || error instanceof TypeError || (isAuthError(error) && error.status === 0);
 }
 
 type StoredSession = { session: Session | null; error: unknown };
