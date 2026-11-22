@@ -1037,8 +1037,8 @@ git add src tests && git commit -m "feat(ui): settings screen with export, impor
 - Consumes: 前面全部任务。
 - Produces: 一个线上可用的网址；确认 Supabase Cron 在免费版是否可用（决定是否保留 `.cron.sql` 或启用 `VITE_PURGE_ON_START`）。
 
-- [ ] **Step 1: 创建 Supabase 项目并推送数据库。** 在 Supabase 控制台新建项目；本机 `npx supabase login`、`npx supabase link --project-ref <ref>`，然后 `npx supabase db push` 只应用 `20261106000100` 到 `20261106000400` 四个 migration（暂时把 `.cron.sql` 文件移出 `migrations/`，Step 2 验证后再放回）。`.env.local` 只填 `VITE_SUPABASE_URL` 和 `VITE_SUPABASE_ANON_KEY`，**绝不填 service_role 密钥**。
-- [ ] **Step 2: 验证 Cron。** 在 SQL 编辑器运行 `select name from pg_available_extensions where name = 'pg_cron';`，再运行 `.cron.sql` 的内容，然后 `select jobname, schedule from cron.job;`，预期看到 `purge-expired`、`0 3 * * *`。看得到则把 `.cron.sql` 放回 `migrations/` 并提交；如果扩展不可用或报权限错误，则不用 Cron，改在 Cloudflare 的环境变量里设置 `VITE_PURGE_ON_START=true`，并把 `.cron.sql` 从仓库里删除，在 `stage1-verification.md` 里记录结论。
+- [ ] **Step 1: 创建 Supabase 项目并推送数据库。** 在 Supabase 控制台新建项目；本机 `npx supabase login`、`npx supabase link --project-ref <ref>`，然后 `npx supabase db push` 应用除 `.cron.sql` 以外的全部 migration（`20261106000100` 到 `20261106000400`，以及加固用的 `20261106000600_harden.sql`；暂时把 `.cron.sql` 文件移出 `migrations/`，Step 2 验证后再放回）。**注意：**如果在 `.cron.sql`（`20261106000500`）移出期间推送了编号更大的 migration（例如 `000600`），之后把它放回时 CLI 会拒绝插入「早于远端最后一个 migration」的文件，这时要用 `npx supabase db push --include-all`。`.env.local` 只填 `VITE_SUPABASE_URL` 和 `VITE_SUPABASE_ANON_KEY`，**绝不填 service_role 密钥**。
+- [ ] **Step 2: 验证 Cron。** 在 SQL 编辑器运行 `select name from pg_available_extensions where name = 'pg_cron';`，再运行 `.cron.sql` 的内容，然后 `select jobname, schedule from cron.job;`，预期看到 `purge-expired`、`0 3 * * *`。看得到则把 `.cron.sql` 放回 `migrations/`、用 `npx supabase db push --include-all` 推送（见 Step 1 的注意）并提交；如果扩展不可用或报权限错误，则不用 Cron，改在 Cloudflare 的环境变量里设置 `VITE_PURGE_ON_START=true`，并把 `.cron.sql` 从仓库里删除，在 `stage1-verification.md` 里记录结论。
 - [ ] **Step 3: 关闭注册并建立自己的账号。** 控制台 Authentication 里：关闭「Allow new users to sign up」、关闭匿名登录、不启用任何第三方登录；在 Users 里手动创建自己的邮箱账号。验证注册确实被拒绝：
 
 ```bash
@@ -1046,7 +1046,7 @@ curl -s -X POST "$VITE_SUPABASE_URL/auth/v1/signup" -H "apikey: $VITE_SUPABASE_A
 ```
 
 预期返回 4xx 且消息表示不允许注册；再用 `grant_type=anonymous` 的登录请求验证匿名登录也被拒绝。
-- [ ] **Step 4: 部署到 Cloudflare Pages。** 连接仓库，构建命令 `npm run build`，输出目录 `dist`，环境变量填 `VITE_SUPABASE_URL`、`VITE_SUPABASE_ANON_KEY`（以及上一步决定的 `VITE_PURGE_ON_START`）。部署后打开网址，预期出现登录页。
+- [ ] **Step 4: 部署到 Cloudflare Pages。** 连接仓库，构建命令 `npm run build`（它先运行 `tsc --noEmit` 做类型检查，再 `vite build`），输出目录 `dist`，Node 版本至少 20.19（`package.json` 的 `engines`；在 Cloudflare 设置环境变量 `NODE_VERSION=22`），环境变量填 `VITE_SUPABASE_URL`、`VITE_SUPABASE_ANON_KEY`（以及上一步决定的 `VITE_PURGE_ON_START`）。部署后打开网址，预期出现登录页。
 - [ ] **Step 5: 在真实的 iPhone（Safari 添加到主屏幕后从主屏幕打开）和 Windows 浏览器各过一遍，把结果记进 `stage1-verification.md`：**
   1. 登录成功；用错误密码登录得到「邮箱或密码不对」。
   2. 在一台设备新建待办，另一台打开后出现。
@@ -1056,7 +1056,7 @@ curl -s -X POST "$VITE_SUPABASE_URL/auth/v1/signup" -H "apikey: $VITE_SUPABASE_A
   6. 导出完整备份，文件能存到「文件」里的 iCloud 云盘（iPhone）和 iCloud 文件夹（Windows）；把它导入，结果显示全部「跳过」。
   7. 清除浏览器数据后重新打开并登录，数据完整回来，云端数据没有减少。
   8. 重新部署一个新版本，旧页面出现「更新」按钮，点击后加载新版本。
-  9. 在无痕窗口打开，看到「此浏览器无法保存本机数据」提示（iPhone 无痕模式同样检查）。
+  9. 在无痕窗口打开（iPhone 无痕模式同样检查）。现在的 Safari（iOS 14 起）和 Chrome 会给无痕窗口一个只存在内存里的 IndexedDB，所以应用多半能正常打开使用，而不是显示「此浏览器无法保存本机数据」。这一项的检查因此是：要么看到该提示，要么应用可用，但关闭无痕窗口后再打开，本机数据没有保留下来（云端数据不受影响）。
   10. 提交 `stage1-verification.md`：
 
 ```bash
