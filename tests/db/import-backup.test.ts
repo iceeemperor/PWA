@@ -191,3 +191,27 @@ describe('import_backup: edge cases', () => {
     expect(r.rows.map(x => x.grantee).filter(g => g !== 'postgres')).toEqual(['authenticated']);
   });
 });
+
+describe('import_backup: server-managed keys and the setting (F7)', () => {
+  it('garbage in user_id, rev and purged_at is ignored, not an abort (add and restore)', async () => {
+    const garbage = { user_id: 'not-a-uuid', rev: 'abc', purged_at: 'whenever' };
+    const r = await imp(A, [row({ id: id1, title: 'added', ...garbage })], false);
+    expect(r).toMatchObject({ added: 1 });
+    expect(await rowOf(id1)).toMatchObject({ user_id: A, title: 'added', purged_at: null });
+
+    await seedRow(id2, 'x'); await makeTombstone(id2);
+    const s = await imp(A, [row({ id: id2, title: 'back', ...garbage })], true);
+    expect(s).toMatchObject({ restored: 1 });
+    expect(await rowOf(id2)).toMatchObject({ user_id: A, title: 'back', purged_at: null });
+  });
+
+  it('app.keep_updated_at is off again when import_backup returns, for the rest of the caller transaction', async () => {
+    await t.asUser(A);
+    const setting = await t.pg.transaction(async (tx) => {
+      await tx.query('select import_backup($1::jsonb, false)', [JSON.stringify({ tables: { todos: [row({ id: id1 })] } })]);
+      return (await tx.query<{ s: string | null }>(`select current_setting('app.keep_updated_at', true) as s`)).rows[0].s;
+    });
+    expect(setting ?? '').not.toBe('on');
+    expect((await rowOf(id1)).updated_at).toEqual(new Date('2025-01-02T00:00:00Z'));
+  });
+});

@@ -248,3 +248,128 @@ grant execute on function push_change(text, jsonb) to authenticated;
 -- tombstone back). The app only writes through push_change and import_backup, which are security definer; SELECT
 -- stays for pull_changes (security invoker). The RLS policies stay as well (spec 3.3), as a second line of defence.
 revoke insert, update on todos from authenticated;
+
+-- F7: import_backup, as in 000400, with two changes: user_id, rev and purged_at are removed from every file row before
+-- jsonb_populate_record, so garbage in them is ignored instead of aborting the import (they were never written);
+-- and app.keep_updated_at is reset before returning, so later writes in the caller's transaction get a fresh
+-- updated_at. Everything else is unchanged.
+create or replace function import_backup(p_payload jsonb, p_restore_purged boolean) returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_uid      uuid := auth.uid();
+  v_restore  boolean := coalesce(p_restore_purged, false);
+  v_tables   jsonb;
+  v_table    text;
+  v_rows     jsonb;
+  v_rec      jsonb;
+  v_id       uuid;
+  v_owner    uuid;
+  v_tomb     boolean;
+  v_ins_cols text[];
+  v_upd_cols text[];
+  v_done     int;
+  v_added    int := 0;
+  v_restored int := 0;
+  v_exists   int := 0;
+  v_purged   int := 0;
+begin
+  if v_uid is null then
+    raise exception 'not_authenticated' using errcode = '28000';
+  end if;
+  if jsonb_typeof(p_payload) is distinct from 'object' then
+    raise exception 'invalid_payload: the payload must be a JSON object' using errcode = '22023';
+  end if;
+  v_tables := coalesce(p_payload -> 'tables', '{}'::jsonb);
+  if jsonb_typeof(v_tables) <> 'object' then
+    raise exception 'invalid_payload: tables must be an object' using errcode = '22023';
+  end if;
+
+  -- Only for this transaction: the trigger keeps the updated_at each write brings.
+  perform set_config('app.keep_updated_at', 'on', true);
+
+  for v_table in select s.name from public.sync_tables s order by s.name loop
+    v_rows := v_tables -> v_table;
+    continue when v_rows is null or jsonb_typeof(v_rows) = 'null';
+    if jsonb_typeof(v_rows) <> 'array' then
+      raise exception 'invalid_payload: tables.% must be an array', v_table using errcode = '22023';
+    end if;
+
+    -- Columns a file row may set: every column except the ones the server owns (read from the catalog, so a table
+    -- added to sync_tables later is covered). A restore does not set created_at (the trigger would keep the old
+    -- one anyway) or deleted_at (decided below).
+    select coalesce(array_agg(a.attname::text order by a.attnum), '{}')
+      into v_ins_cols
+      from pg_catalog.pg_attribute a
+     where a.attrelid = format('public.%I', v_table)::regclass
+       and a.attnum > 0 and not a.attisdropped and a.attgenerated = ''
+       and a.attname not in ('id', 'user_id', 'rev', 'purged_at');
+    select coalesce(array_agg(x), '{}') into v_upd_cols
+      from unnest(v_ins_cols) x where x not in ('created_at', 'deleted_at');
+
+    for v_rec in select r from jsonb_array_elements(v_rows) r loop
+      if jsonb_typeof(v_rec) <> 'object' or jsonb_typeof(v_rec -> 'id') is distinct from 'string' then
+        raise exception 'invalid_payload: every row of tables.% must be an object with an id', v_table
+          using errcode = '22023';
+      end if;
+      v_id := (v_rec ->> 'id')::uuid;
+      -- Server-managed keys are never read from the file, whatever they hold (F7).
+      v_rec := v_rec - 'user_id' - 'rev' - 'purged_at';
+
+      v_owner := null;
+      execute format('select t.user_id, t.purged_at is not null from public.%I t where t.id = $1', v_table)
+        into v_owner, v_tomb using v_id;
+
+      if v_owner is null then
+        -- Only the columns the file has are inserted, so the others take their DEFAULT.
+        execute format(
+          'insert into public.%1$I as t (id, user_id%2$s) '
+          'select $1, $2%3$s from jsonb_populate_record(null::public.%1$I, $3) r',
+          v_table,
+          coalesce((select string_agg(format(', %I', x), '') from unnest(v_ins_cols) x where v_rec ? x), ''),
+          coalesce((select string_agg(format(', r.%I', x), '') from unnest(v_ins_cols) x where v_rec ? x), ''))
+          using v_id, v_uid, v_rec;
+        v_added := v_added + 1;
+      elsif v_owner <> v_uid or not v_tomb then
+        v_exists := v_exists + 1;
+      elsif not v_restore then
+        v_purged := v_purged + 1;
+      else
+        -- Every content column is written: from the file, or its DEFAULT when the file lacks it.
+        execute format(
+          'update public.%1$I as t set %2$spurged_at = null, '
+          'deleted_at = case when $3 ->> ''deleted_at'' is null then null else now() end '
+          'from jsonb_populate_record(null::public.%1$I, $3) r '
+          'where t.id = $1 and t.user_id = $2 and t.purged_at is not null',
+          v_table,
+          coalesce((select string_agg(case when v_rec ? x then format('%1$I = r.%1$I, ', x)
+                                           else format('%I = default, ', x) end, '')
+                      from unnest(v_upd_cols) x), ''))
+          using v_id, v_uid, v_rec;
+        get diagnostics v_done = row_count;
+        if v_done <> 1 then
+          -- Changed by someone else since it was read: no longer a tombstone of this user.
+          v_exists := v_exists + 1;
+        else
+          v_restored := v_restored + 1;
+        end if;
+      end if;
+    end loop;
+  end loop;
+
+  -- The setting is for this function's writes only, not for the rest of the caller's transaction (F7).
+  perform set_config('app.keep_updated_at', '', true);
+
+  return jsonb_build_object(
+    'added', v_added,
+    'restored', v_restored,
+    'skipped', jsonb_strip_nulls(jsonb_build_object('exists', nullif(v_exists, 0), 'purged', nullif(v_purged, 0))));
+end
+$$;
+
+-- Supabase hands every new function to anon and authenticated (and Postgres to PUBLIC): take that away,
+-- then give it to signed-in users only.
+revoke execute on function import_backup(jsonb, boolean) from public, anon, authenticated;
+grant execute on function import_backup(jsonb, boolean) to authenticated;
