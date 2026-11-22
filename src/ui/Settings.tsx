@@ -1,4 +1,4 @@
-import { useEffect, useState, type ChangeEvent } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import type { Services } from '../app/services';
 import { buildBackup } from '../backup/export-json';
 import { buildMarkdownZip } from '../backup/export-markdown';
@@ -73,6 +73,14 @@ export function Settings({ services }: SettingsProps) {
   const [failed, setFailed] = useState<QueuedOp[]>([]);
   const [failedLoaded, setFailedLoaded] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  // Same live-flag pattern as the failed-list loader: work that finishes after the page closed sets no state.
+  const live = useRef(true);
+  useEffect(() => {
+    live.current = true;
+    return () => {
+      live.current = false;
+    };
+  }, []);
 
   // Freshen the local data while the user reads the page, so the export click has little left to wait for.
   useEffect(() => {
@@ -112,8 +120,11 @@ export function Settings({ services }: SettingsProps) {
     } catch {
       // The list stays as it is; the user can try again.
     } finally {
-      setRetrying(false);
-      setFailed(await repo.failedOps().catch(() => failed));
+      if (live.current) {
+        setRetrying(false);
+        const ops = await repo.failedOps().catch(() => null);
+        if (live.current && ops) setFailed(ops);
+      }
     }
   }
 

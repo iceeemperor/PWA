@@ -46,6 +46,8 @@ export function mapSupabaseError(e: unknown): CloudError {
   ) {
     return make('auth');
   }
+  // 408 and 429: the server is busy or the request timed out; retry later with backoff, the ops stay queued.
+  if (status === 408 || status === 429) return make('unavailable');
   if ((status !== undefined && status >= 500) || lower.includes('paused')) return make('unavailable');
   return make('rejected');
 }

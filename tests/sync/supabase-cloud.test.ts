@@ -38,6 +38,14 @@ describe('mapSupabaseError', () => {
     expect(mapSupabaseError({ status: 500 }).kind).toBe('unavailable');
     expect(mapSupabaseError({ message: 'project is paused' }).kind).toBe('unavailable');
   });
+  it('maps 408 (timeout) and 429 (rate limited) to unavailable, so the ops stay queued', () => {
+    expect(mapSupabaseError({ status: 408, message: 'Request Timeout' }).kind).toBe('unavailable');
+    expect(mapSupabaseError({ status: 429, message: 'Too Many Requests' }).kind).toBe('unavailable');
+  });
+  it('a 429 response through createSupabaseCloud is unavailable', async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: null, status: 429, error: { message: 'rate limit', code: '' } });
+    await expect(createSupabaseCloud({ rpc } as any).push(op)).rejects.toMatchObject({ kind: 'unavailable' });
+  });
   it('maps Postgres data errors (23xxx) and other 4xx to rejected', () => {
     expect(mapSupabaseError({ code: '23514' }).kind).toBe('rejected');
     expect(mapSupabaseError({ status: 400 }).kind).toBe('rejected');

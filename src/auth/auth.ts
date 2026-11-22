@@ -68,8 +68,12 @@ function detailOf(error: unknown, email: string, password: string): string | und
   const message = typeof e.message === 'string' ? e.message : typeof error === 'string' ? error : '';
   const code = typeof e.code === 'string' && e.code !== '' && !message.includes(e.code) ? e.code : '';
   let text = [message.trim(), code ? `[${code}]` : ''].filter(Boolean).join(' ');
-  for (const secret of [email, email.trim(), password]) {
-    if (secret) text = text.split(secret).join('…');
+  // Case-insensitive: the server lowercases emails, so `Me@Example.com` can come back as `me@example.com`.
+  const trimmed = email.trim();
+  const secrets = [email, trimmed, encodeURIComponent(trimmed), password].filter((x) => x !== '');
+  // Longest first, so a secret inside another (the email inside its encoded form) does not leave pieces behind.
+  for (const secret of [...new Set(secrets)].sort((x, y) => y.length - x.length)) {
+    text = text.replace(new RegExp(secret.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '…');
   }
   return text ? text.slice(0, DETAIL_MAX) : undefined;
 }

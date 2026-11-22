@@ -327,4 +327,20 @@ describe('Settings: edges', () => {
     expect(screen.queryByRole('button', { name: '全部重试' })).toBeNull();
     expect(await repo.pendingCount()).toBe(2);
   });
+
+  it('全部重试 finishing after the page closed does not re-read or set state', async () => {
+    const op: QueuedOp = { seq: 1, op_id: id1, table: 'todos', id: id2, kind: 'insert', base_rev: null, fields: {}, failed: { reason: 'x' } };
+    const reads = vi.spyOn(repo, 'failedOps').mockResolvedValue([op]);
+    let finish!: (n: number) => void;
+    vi.spyOn(repo, 'retryFailed').mockImplementation(() => new Promise<number>((r) => (finish = r)));
+    const view = renderSettings();
+    fireEvent.click(await screen.findByRole('button', { name: '全部重试' }));
+    await waitFor(() => expect(repo.retryFailed).toHaveBeenCalled());
+    view.unmount();
+    const before = reads.mock.calls.length;
+    finish(1);
+    await settle(() => engine.sync.mock.calls.length > 0);
+    for (let i = 0; i < 20; i++) await new Promise<void>((r) => setImmediate(r));
+    expect(reads.mock.calls.length).toBe(before);
+  });
 });

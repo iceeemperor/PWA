@@ -59,6 +59,9 @@ export async function createServices(env: ImportMetaEnv): Promise<Services> {
   });
   // Ops an earlier build marked failed on a lost connection (status-0 fetch errors) go back in the queue, before the
   // engine counts it. Ops the server really refused stay failed for the user.
+  // The queue is device-wide, not per account. Requeueing every network-failed op is safe only because the F3 owner
+  // guard (owned-auth) refuses to sign in another account while this device's owner still has ops queued, so the
+  // ops pushed here are always the signed-in owner's.
   await requeueNetworkFailures(repo);
 
   const cloud = createSupabaseCloud(supabase);

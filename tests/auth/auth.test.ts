@@ -71,6 +71,25 @@ describe('createSupabaseAuth: signIn', () => {
     expect(await off.signIn('a@b.c', 'x')).toEqual({ ok: false, reason: 'network' });
   });
 
+  it('masks the email case-insensitively and URL-encoded; an empty password masks nothing', async () => {
+    const echo = new AuthApiError('User me+x@example.com (me%2Bx%40example.com) is banned', 400, 'user_banned');
+    const a = createSupabaseAuth(fakeClient({ signIn: async () => ({ data: { session: null }, error: echo }) }).client);
+    const r = await a.signIn('Me+X@Example.COM', 'Hunter22');
+    const detail = r.ok === false && r.reason === 'unknown' ? r.detail! : '';
+    expect(detail).toContain('is banned');
+    expect(detail.toLowerCase()).not.toContain('me+x@example.com');
+    expect(detail.toLowerCase()).not.toContain('me%2bx%40example.com');
+
+    const pw = new AuthApiError('PASSWORD hunter22 rejected', 400, 'weird');
+    const b = createSupabaseAuth(fakeClient({ signIn: async () => ({ data: { session: null }, error: pw }) }).client);
+    const r2 = await b.signIn('a@b.c', 'Hunter22');
+    expect(r2.ok === false && r2.reason === 'unknown' ? r2.detail : '').not.toMatch(/hunter22/i);
+
+    const plain = new AuthApiError('Email logins are disabled', 422, 'email_provider_disabled');
+    const c = createSupabaseAuth(fakeClient({ signIn: async () => ({ data: { session: null }, error: plain }) }).client);
+    expect(await c.signIn('', '')).toEqual({ ok: false, reason: 'unknown', detail: 'Email logins are disabled [email_provider_disabled]' });
+  });
+
   it('the detail is capped at 120 characters and never contains the email or password', async () => {
     const long = new AuthApiError('x'.repeat(300), 500, 'unexpected_failure');
     const a = createSupabaseAuth(fakeClient({ signIn: async () => ({ data: { session: null }, error: long }) }).client);
