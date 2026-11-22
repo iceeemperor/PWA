@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import type { Services } from '../app/services';
+import { ExportReminder } from './ExportReminder';
+import { Settings } from './Settings';
 import { SyncBanner } from './SyncBanner';
 import { TodosTemp } from './TodosTemp';
 import { useSyncStatus } from './useSyncStatus';
@@ -59,14 +61,8 @@ export function Shell({ services, confirmFn = defaultConfirm }: ShellProps) {
           </button>
         </header>
         <main className="content">
-          {tab === 'todos' ? (
-            <TodosTemp repo={repo} engine={engine} />
-          ) : (
-            <section className="page">
-              <h2>设置</h2>
-              <p className="muted">设置页将在下一步加入。</p>
-            </section>
-          )}
+          <ExportReminder services={services} onOpenSettings={tab === 'settings' ? undefined : () => setTab('settings')} />
+          {tab === 'todos' ? <TodosTemp repo={repo} engine={engine} /> : <Settings services={services} />}
         </main>
       </div>
     </div>

@@ -304,6 +304,112 @@ button:focus-visible {
   text-decoration: line-through;
 }
 
+/* Export reminder, above every page */
+.export-reminder {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.export-reminder .link {
+  color: var(--warn-text);
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+/* Settings */
+.settings .card {
+  background: var(--card);
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.settings h3 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.settings .card p {
+  margin: 0;
+}
+
+.settings .scope {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  width: 100%;
+}
+
+.settings .scope legend {
+  font-size: 14px;
+  color: var(--muted);
+  padding: 0 4px;
+}
+
+.settings .scope label,
+.settings .check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+}
+
+.settings input[type='radio'],
+.settings input[type='checkbox'] {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--brand);
+}
+
+.settings .field {
+  width: 100%;
+}
+
+.settings input[type='file'] {
+  max-width: 100%;
+  font-size: 14px;
+}
+
+.settings ul {
+  margin: 0;
+  padding-left: 20px;
+  width: 100%;
+  word-break: break-word;
+}
+
+.settings .error-list {
+  color: var(--danger);
+  font-size: 14px;
+}
+
+.failed-list {
+  list-style: none;
+  padding-left: 0 !important;
+}
+
+.failed-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.failed-list li:last-child {
+  border-bottom: none;
+}
+
 @media (min-width: 768px) {
   .shell {
     display: flex;

@@ -142,6 +142,6 @@ describe('App: edges', () => {
     renderShell();
     expect(screen.getByRole('button', { name: '待办' })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: '设置' }));
-    expect(screen.getByText(/设置页将在下一步加入/)).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: '导出完整备份' })).toBeInTheDocument();
   });
 });
