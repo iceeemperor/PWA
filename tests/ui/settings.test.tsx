@@ -148,6 +148,30 @@ describe('Settings: edges', () => {
     expect(screen.queryByText(/备份/)).not.toBeInTheDocument();
   });
 
+  it('re-checks when the app comes back to the foreground (F9)', async () => {
+    await db.setMeta('last_export_at', '2026-10-30T00:00:00.000Z');
+    render(<ExportReminder services={services} />);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByText(/备份/)).not.toBeInTheDocument();
+    // The phone left the app open in the background for two days.
+    vi.setSystemTime('2026-11-07T00:00:00Z');
+    const state = vi.spyOn(document, 'visibilityState', 'get');
+    state.mockReturnValue('hidden');
+    document.dispatchEvent(new Event('visibilitychange'));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByText(/备份/)).not.toBeInTheDocument();
+    state.mockReturnValue('visible');
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(await screen.findByText(/已经 8 天没有导出备份/)).toBeInTheDocument();
+  });
+
+  it('stops listening for visibility changes once unmounted (F9)', async () => {
+    const remove = vi.spyOn(document, 'removeEventListener');
+    const { unmount } = render(<ExportReminder services={services} />);
+    unmount();
+    expect(remove).toHaveBeenCalledWith('visibilitychange', expect.any(Function));
+  });
+
   it('does not record the export when saving the file fails, and says so', async () => {
     vi.mocked(saveFile).mockRejectedValue(new Error('disk full'));
     renderSettings();

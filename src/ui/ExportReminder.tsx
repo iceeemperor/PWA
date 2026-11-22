@@ -18,7 +18,10 @@ export interface ExportReminderProps {
   onOpenSettings?: () => void;
 }
 
-/** Spec 7.1: more than 7 days since the last full backup (or none yet) shows a reminder on top of every page. */
+/**
+ * Spec 7.1: more than 7 days since the last full backup (or none yet) shows a reminder on top of every page.
+ * Checked on mount, after an export, and whenever the app returns to the foreground.
+ */
 export function ExportReminder({ services, onOpenSettings }: ExportReminderProps) {
   const { db } = services;
   const [text, setText] = useState<string | null>(null);
@@ -43,9 +46,15 @@ export function ExportReminder({ services, onOpenSettings }: ExportReminderProps
     };
     void check();
     exportListeners.add(check);
+    // An installed app can sit in the background for days: coming back is when the 7 days may have passed.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void check();
+    };
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       live = false;
       exportListeners.delete(check);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [db]);
 
