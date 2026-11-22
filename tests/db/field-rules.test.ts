@@ -10,6 +10,8 @@ type Row = Record<string, unknown>;
 type Case = [field: string, value: unknown, ok: boolean];
 
 const NUL = '\u0000';
+const LONE_HI = '\uD800';
+const LONE_LO = '\uDC00';
 const step = (over: Row = {}) => ({ id: 's1', text: 'a step', done: false, ...over });
 
 const CASES: Case[] = [
@@ -22,6 +24,10 @@ const CASES: Case[] = [
   ['title', 5, false],
   ['title', null, false],
   ['title', `a${NUL}b`, false],
+  ['title', `a${LONE_HI}b`, false],
+  ['title', `a${LONE_LO}`, false],
+  ['title', `${LONE_LO}${LONE_HI}`, false],
+  ['title', 'emoji ' + String.fromCodePoint(0x1f600) + ' ok', true],
   ['done', true, true],
   ['done', false, true],
   ['done', 'yes', false],
@@ -38,6 +44,8 @@ const CASES: Case[] = [
   ['note', { x: 1 }, false],
   ['note', 5, false],
   ['note', `a${NUL}`, false],
+  ['note', `a${LONE_HI}b`, false],
+  ['note', 'pair ' + String.fromCodePoint(0x1f600), true],
   ['due_date', null, true],
   ['due_date', '2026-02-28', true],
   ['due_date', '2028-02-29', true],
@@ -63,6 +71,8 @@ const CASES: Case[] = [
   ['steps', [step({ extra: 1 })], false],
   ['steps', [{ id: 's1', text: 'a' }], false],
   ['steps', [step({ text: `a${NUL}` })], false],
+  ['steps', [step({ text: `a${LONE_HI}b` })], false],
+  ['steps', [step({ id: `s${LONE_LO}` })], false],
   ['created_at', '2026-11-06T10:00:00.000Z', true],
   ['created_at', '2026-11-06T10:00:00.123456+00:00', true],
   ['created_at', '2000-01-01T00:00:00Z', true],

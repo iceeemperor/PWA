@@ -302,6 +302,17 @@ describe('repo', () => {
     expect(await repo.list('todos')).toHaveLength(1);
   });
 
+  it('rejects text with a lone surrogate (it could never sync) and leaves nothing behind', async () => {
+    const bad = 'a\uD800b';
+    await expect(repo.create('todos', { title: bad })).rejects.toBeInstanceOf(InvalidRecordError);
+    await expect(repo.create('todos', { title: 'a', note: bad })).rejects.toBeInstanceOf(InvalidRecordError);
+    await expect(repo.create('todos', { title: 'a', steps: [{ id: 's', text: bad, done: false }] })).rejects.toBeInstanceOf(InvalidRecordError);
+    const r = await repo.create('todos', { title: 'a' });
+    await expect(repo.update('todos', r.id, { title: bad })).rejects.toBeInstanceOf(InvalidRecordError);
+    expect(await repo.list('todos')).toHaveLength(1);
+    expect(await ops()).toHaveLength(1);
+  });
+
   it('rejects invalid fields', async () => {
     await expect(repo.create('todos', { title: '  ' })).rejects.toBeInstanceOf(InvalidRecordError);
     await expect(repo.create('todos', { title: 'a', due_date: '2026/11/05' })).rejects.toBeInstanceOf(InvalidRecordError);

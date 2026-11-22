@@ -21,6 +21,22 @@ const TIMESTAMP_PATTERN =
 /** No U+0000: Postgres text and jsonb cannot hold it, so such a value could never sync. */
 export const hasNoNul = (s: string): boolean => !s.includes('\u0000');
 
+// A lone surrogate half (a high not followed by a low, or a low not after a high). No lookbehind: Safari 16.0-16.3
+// would fail to parse this whole module.
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+/**
+ * Well-formed UTF-16 (no lone surrogate): Postgres refuses such a string as JSON, so it could never sync. Uses
+ * String.prototype.isWellFormed where the engine has it (Safari 16.4+), a regex otherwise (Safari 16.0-16.3).
+ */
+export const isWellFormed = (s: string): boolean =>
+  typeof (s as { isWellFormed?: unknown }).isWellFormed === 'function'
+    ? (s as string & { isWellFormed(): boolean }).isWellFormed()
+    : !LONE_SURROGATE.test(s);
+
+/** Text the cloud can store: no U+0000 and no lone surrogate. */
+export const isStorableText = (s: string): boolean => hasNoNul(s) && isWellFormed(s);
+
 /** Not blank after trimming (JS whitespace; the SQL CHECK trims the same characters). */
 export const isNonBlank = (s: string): boolean => s.trim() !== '';
 
@@ -50,15 +66,15 @@ export function isCreatedAt(s: unknown): boolean {
   return year >= 2000 && year <= 9999;
 }
 
-/** `{ id: non-empty string, text: string, done: boolean }` and no other keys; no U+0000 in the strings. */
+/** `{ id: non-empty string, text: string, done: boolean }` and no other keys; no U+0000 or lone surrogate in the strings. */
 export function isStep(x: unknown): boolean {
   if (typeof x !== 'object' || x === null || Array.isArray(x)) return false;
   const o = x as Record<string, unknown>;
   const keys = Object.keys(o);
   if (keys.length !== 3 || !keys.every((k) => k === 'id' || k === 'text' || k === 'done')) return false;
   return (
-    typeof o.id === 'string' && o.id !== '' && hasNoNul(o.id) &&
-    typeof o.text === 'string' && hasNoNul(o.text) &&
+    typeof o.id === 'string' && o.id !== '' && isStorableText(o.id) &&
+    typeof o.text === 'string' && isStorableText(o.text) &&
     typeof o.done === 'boolean'
   );
 }
@@ -71,7 +87,7 @@ type CheckedFields = Partial<TodoFields> & { created_at?: unknown };
  */
 export function validateTodoFields(input: Partial<TodoFields>): void {
   const f = input as Record<keyof CheckedFields, unknown>;
-  if (f.title !== undefined && (typeof f.title !== 'string' || !isNonBlank(f.title) || !hasNoNul(f.title))) {
+  if (f.title !== undefined && (typeof f.title !== 'string' || !isNonBlank(f.title) || !isStorableText(f.title))) {
     throw new InvalidRecordError('title must be text that is not empty');
   }
   if (f.done !== undefined && typeof f.done !== 'boolean') {
@@ -83,7 +99,7 @@ export function validateTodoFields(input: Partial<TodoFields>): void {
   if (f.priority !== undefined && (typeof f.priority !== 'string' || !PRIORITIES.includes(f.priority))) {
     throw new InvalidRecordError(`priority must be one of: ${PRIORITIES.join(', ')}`);
   }
-  if (f.note !== undefined && (typeof f.note !== 'string' || !hasNoNul(f.note))) {
+  if (f.note !== undefined && (typeof f.note !== 'string' || !isStorableText(f.note))) {
     throw new InvalidRecordError('note must be text');
   }
   if (f.due_date !== undefined && f.due_date !== null && !isCalendarDate(f.due_date)) {

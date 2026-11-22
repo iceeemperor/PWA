@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { hasNoNul, isCalendarDate, isCreatedAt, isNonBlank } from '../data/validate-fields';
+import { isStorableText, isCalendarDate, isCreatedAt, isNonBlank } from '../data/validate-fields';
 import { isUuid } from '../domain/ids';
 import {
   BACKUP_FORMAT,
@@ -20,8 +20,8 @@ const SUPPORTED_TABLES: readonly BackupTableKey[] = ['todos'];
 
 const datetime = z.iso.datetime({ offset: true });
 
-const NO_NUL = 'must not contain the character U+0000';
-const text = () => z.string().refine(hasNoNul, NO_NUL);
+const NOT_STORABLE = 'must not contain the character U+0000 or an unpaired UTF-16 surrogate';
+const text = () => z.string().refine(isStorableText, NOT_STORABLE);
 
 const stepSchema = z.strictObject({ id: text().min(1), text: text(), done: z.boolean() });
 
