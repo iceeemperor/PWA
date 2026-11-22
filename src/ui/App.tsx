@@ -64,7 +64,7 @@ function RootBody({ state }: { state: RootState }) {
 /** Login page while signed out; the shell, with sync running, while signed in. */
 export function App({ services }: { services: Services }) {
   const { auth, engine, repo } = services;
-  const [session, setSession] = useState<SessionChange>(() => ({ userId: auth.getUserId(), expired: false }));
+  const [session, setSession] = useState<SessionChange>(() => ({ userId: auth.getUserId(), expired: auth.expiredAtStart?.() ?? false }));
 
   useEffect(() => auth.onSessionChange(setSession), [auth]);
 

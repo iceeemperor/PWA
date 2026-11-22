@@ -3,13 +3,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   startSyncTriggers: vi.fn((_d: unknown) => () => {}),
   createSyncEngine: vi.fn(),
+  getSession: vi.fn(async (): Promise<unknown> => ({ data: { session: null }, error: null })),
 }));
 
 vi.mock('../../src/supabase', () => ({
   getSupabase: () => ({
     rpc: vi.fn(),
     auth: {
-      getSession: async () => ({ data: { session: null }, error: null }),
+      getSession: () => mocks.getSession(),
       onAuthStateChange: () => ({ data: { subscription: { unsubscribe() {} } } }),
     },
   }),
@@ -22,7 +23,9 @@ vi.mock('../../src/sync/engine', async (orig) => {
 });
 
 import { createServices } from '../../src/app/services';
-import { LocalDbUnavailableError } from '../../src/data/local-db';
+import { AuthRetryableFetchError } from '@supabase/supabase-js';
+import { LocalDbUnavailableError, openLocalDb } from '../../src/data/local-db';
+import { OWNER_SIGNED_IN, OWNER_USER_ID } from '../../src/data/owner';
 
 const env = (extra: Record<string, string> = {}) => ({ ...import.meta.env, ...extra }) as ImportMetaEnv;
 
@@ -30,6 +33,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
   mocks.startSyncTriggers.mockClear();
   mocks.createSyncEngine.mockClear();
+  mocks.getSession.mockReset();
+  mocks.getSession.mockImplementation(async () => ({ data: { session: null }, error: null }));
 });
 
 describe('createServices', () => {
@@ -66,5 +71,54 @@ describe('createServices', () => {
     const s = await createServices(env());
     await expect(s.repo.create('todos', { title: 'x' })).rejects.toThrow();
     expect(await s.repo.pendingCount()).toBe(0);
+  });
+
+  it('offline with an expired token, boots quickly into the remembered owner (F1)', async () => {
+    const owner = '00000000-0000-4000-8000-0000000000aa';
+    const db = await openLocalDb();
+    await db.setMeta(OWNER_USER_ID, owner);
+    await db.setMeta(OWNER_SIGNED_IN, true);
+    db.close();
+    // auth-js offline: the refresh never comes back within boot's bound.
+    mocks.getSession.mockImplementation(() => new Promise(() => {}));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      let s: Awaited<ReturnType<typeof createServices>> | undefined;
+      void createServices(env()).then((r) => (s = r));
+      // Local IndexedDB work also runs on (faked) timers: step time until boot is done, never more than the bound.
+      let waited = 0;
+      while (!s && waited < 5000) {
+        await vi.advanceTimersByTimeAsync(50);
+        waited += 50;
+      }
+      // The bound is 2 s; without it auth-js would hold boot for about 25 s.
+      expect(waited).toBeLessThan(3000);
+      if (!s) throw new Error('boot did not finish');
+      expect(s.auth.getUserId()).toBe(owner);
+      await s.repo.create('todos', { title: 'offline' });
+      expect(await s.repo.pendingCount()).toBe(1);
+      s.db.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('offline with a retryable refresh error, also boots into the remembered owner; signed out stays signed out', async () => {
+    const owner = '00000000-0000-4000-8000-0000000000ab';
+    mocks.getSession.mockImplementation(async () => ({ data: { session: null }, error: new AuthRetryableFetchError('Failed to fetch', 0) }));
+    const db = await openLocalDb();
+    await db.setMeta(OWNER_USER_ID, owner);
+    await db.setMeta(OWNER_SIGNED_IN, true);
+    db.close();
+    const s = await createServices(env());
+    expect(s.auth.getUserId()).toBe(owner);
+    s.db.close();
+
+    const db2 = await openLocalDb();
+    await db2.setMeta(OWNER_SIGNED_IN, false);
+    db2.close();
+    const t = await createServices(env());
+    expect(t.auth.getUserId()).toBeNull();
+    t.db.close();
   });
 });

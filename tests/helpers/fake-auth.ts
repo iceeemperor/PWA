@@ -5,6 +5,8 @@ export type FakeAuth = AuthApi & {
   expire(): void;
   /** What the next signIn calls return. A successful sign-in signs in as `fake-user`. */
   setSignInResult(r: SignInResult): void;
+  /** The user a successful signIn signs in as (default: `initialUserId`, else `FAKE_USER_ID`). */
+  setSignInUser(id: string): void;
 };
 
 export const FAKE_USER_ID = '00000000-0000-4000-8000-000000000001';
@@ -13,6 +15,7 @@ export const FAKE_USER_ID = '00000000-0000-4000-8000-000000000001';
 export function createFakeAuth(initialUserId: string | null = FAKE_USER_ID): FakeAuth {
   let userId: string | null = initialUserId;
   let next: SignInResult = { ok: true };
+  let signInUser: string = initialUserId ?? FAKE_USER_ID;
   const listeners = new Set<(s: { userId: string | null; expired: boolean }) => void>();
   const emit = (expired: boolean) => {
     for (const fn of [...listeners]) fn({ userId, expired });
@@ -22,7 +25,7 @@ export function createFakeAuth(initialUserId: string | null = FAKE_USER_ID): Fak
     async signIn() {
       const r = next;
       if (r.ok) {
-        userId = initialUserId ?? FAKE_USER_ID;
+        userId = signInUser;
         emit(false);
       }
       return r;
@@ -44,6 +47,9 @@ export function createFakeAuth(initialUserId: string | null = FAKE_USER_ID): Fak
     },
     setSignInResult(r) {
       next = r;
+    },
+    setSignInUser(id) {
+      signInUser = id;
     },
   };
 }

@@ -66,6 +66,12 @@ describe('App: login and session (brief)', () => {
     expect(await repo.pendingCount()).toBe(1);
   });
 
+  it('a session refused at start shows the expiry notice on the login page (F1)', async () => {
+    const refused = Object.assign(createFakeAuth(null), { expiredAtStart: () => true });
+    render(<App services={{ ...services, auth: refused }} />);
+    expect(await screen.findByText(/登录已过期.*未同步的改动已保留/)).toBeInTheDocument();
+  });
+
   it('sign-out with pending changes asks first and cancelling keeps the session', async () => {
     await repo.create('todos', { title: 'x' });
     const confirmFn = vi.fn(() => false);

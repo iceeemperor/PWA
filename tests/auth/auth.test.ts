@@ -110,3 +110,97 @@ describe('createSupabaseAuth: session', () => {
     expect(fn).not.toHaveBeenCalled();
   });
 });
+
+describe('createSupabaseAuth: offline start (F1)', () => {
+  // auth-js, offline with an expired access token: getSession retries the refresh, then gives no session and a
+  // retryable fetch error while the session stays in storage.
+  function offlineClient(getSession: () => Promise<unknown>) {
+    const f = fakeClient();
+    f.auth.getSession.mockImplementation(getSession as never);
+    return f;
+  }
+  const remembered = (id: string | null) => ({ offlineUserId: async () => id, readyTimeoutMs: 50 });
+
+  it('a refresh that failed for want of a network keeps the remembered owner signed in', async () => {
+    const f = offlineClient(async () => ({ data: { session: null }, error: new AuthRetryableFetchError('Failed to fetch', 0) }));
+    const a = createSupabaseAuth(f.client, remembered('u1'));
+    await a.ready;
+    expect(a.getUserId()).toBe('u1');
+    expect(a.expiredAtStart?.()).toBe(false);
+  });
+
+  it('a fetch TypeError counts as offline too', async () => {
+    const f = offlineClient(async () => { throw new TypeError('Failed to fetch'); });
+    const a = createSupabaseAuth(f.client, remembered('u1'));
+    await a.ready;
+    expect(a.getUserId()).toBe('u1');
+  });
+
+  it('without a remembered owner an offline start stays signed out', async () => {
+    const f = offlineClient(async () => ({ data: { session: null }, error: new AuthRetryableFetchError('Failed to fetch', 0) }));
+    const a = createSupabaseAuth(f.client, remembered(null));
+    await a.ready;
+    expect(a.getUserId()).toBeNull();
+  });
+
+  it('boot does not wait for a slow refresh: ready resolves after the bound with the remembered owner', async () => {
+    const f = offlineClient(() => new Promise(() => {}));
+    const a = createSupabaseAuth(f.client, remembered('u1'));
+    const t0 = Date.now();
+    await a.ready;
+    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(a.getUserId()).toBe('u1');
+  });
+
+  it('an auth rejection at start is not offline: signed out, and reported as expired for the owner', async () => {
+    const f = offlineClient(async () => ({ data: { session: null }, error: new AuthApiError('Invalid Refresh Token', 400, 'refresh_token_not_found') }));
+    const a = createSupabaseAuth(f.client, remembered('u1'));
+    await a.ready;
+    expect(a.getUserId()).toBeNull();
+    expect(a.expiredAtStart?.()).toBe(true);
+  });
+
+  it('no stored session and no error: signed out', async () => {
+    const f = offlineClient(async () => ({ data: { session: null }, error: null }));
+    const a = createSupabaseAuth(f.client, remembered('u1'));
+    await a.ready;
+    expect(a.getUserId()).toBeNull();
+  });
+
+  it('a late refresh result after the bound: an auth error expires the session, a network error does not', async () => {
+    let finish!: (v: unknown) => void;
+    const f = offlineClient(() => new Promise((r) => (finish = r)));
+    const a = createSupabaseAuth(f.client, remembered('u1'));
+    await a.ready;
+    const seen: unknown[] = [];
+    a.onSessionChange((s) => seen.push(s));
+    finish({ data: { session: null }, error: new AuthApiError('Invalid Refresh Token', 400, 'refresh_token_not_found') });
+    await vi.waitFor(() => expect(seen).toEqual([{ userId: null, expired: true }]));
+    expect(a.getUserId()).toBeNull();
+
+    let finish2!: (v: unknown) => void;
+    const g = offlineClient(() => new Promise((r) => (finish2 = r)));
+    const b = createSupabaseAuth(g.client, remembered('u1'));
+    await b.ready;
+    const fn = vi.fn();
+    b.onSessionChange(fn);
+    finish2({ data: { session: null }, error: new AuthRetryableFetchError('Failed to fetch', 0) });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(fn).not.toHaveBeenCalled();
+    expect(b.getUserId()).toBe('u1');
+  });
+
+  it('an INITIAL_SESSION without a session does not sign the offline owner out', async () => {
+    const f = offlineClient(async () => ({ data: { session: null }, error: new AuthRetryableFetchError('Failed to fetch', 0) }));
+    const a = createSupabaseAuth(f.client, remembered('u1'));
+    await a.ready;
+    const fn = vi.fn();
+    a.onSessionChange(fn);
+    f.emit('INITIAL_SESSION', null);
+    f.emit('TOKEN_REFRESHED', sess('u1'));
+    expect(fn).not.toHaveBeenCalled();
+    expect(a.getUserId()).toBe('u1');
+    f.emit('SIGNED_OUT', null);
+    expect(fn).toHaveBeenCalledWith({ userId: null, expired: true });
+  });
+});

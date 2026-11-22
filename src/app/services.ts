@@ -1,5 +1,7 @@
 import { createSupabaseAuth, type AuthApi } from '../auth/auth';
+import { createOwnedAuth } from '../auth/owned-auth';
 import { openLocalDb, type LocalDb } from '../data/local-db';
+import { createOwnerStore } from '../data/owner';
 import { createRepo, type Repo } from '../data/repo';
 import { getSupabase } from '../supabase';
 import type { CloudClient } from '../sync/cloud';
@@ -32,7 +34,9 @@ export class NotSignedInError extends Error {
 export async function createServices(env: ImportMetaEnv): Promise<Services> {
   const db = await openLocalDb();
   const supabase = getSupabase();
-  const auth = createSupabaseAuth(supabase);
+  const owner = createOwnerStore(db);
+  // Offline with an expired token, the remembered owner keeps the app usable; boot never waits on the refresh.
+  const auth = createOwnedAuth(createSupabaseAuth(supabase, { offlineUserId: () => owner.signedInOwner() }), owner);
   await auth.ready;
 
   // One local database per browser profile; records carry the signed-in user's id at write time.
