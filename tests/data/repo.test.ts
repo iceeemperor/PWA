@@ -228,6 +228,44 @@ describe('repo', () => {
     expect((await repo.failedOps()).map((o) => [o.seq, o.failed])).toEqual([[1, { reason: 'early' }], [3, { reason: 'late' }]]);
   });
 
+  it('retryFailed clears failed on every failed op, keeps seq order and fields, returns the count', async () => {
+    const a = await repo.create('todos', { title: 'a' });
+    await repo.update('todos', a.id, { done: true });
+    await repo.remove('todos', a.id);
+    const before = await ops();
+    await markFailed(1, 'TypeError: Load failed');
+    await markFailed(3, 'title cannot be empty');
+    const fn = vi.fn();
+    repo.onChange(fn);
+    expect(await repo.retryFailed()).toBe(2);
+    expect(await ops()).toEqual(before);
+    expect(await repo.failedOps()).toEqual([]);
+    expect(await repo.pendingCount()).toBe(3);
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it('retryFailed with nothing failed returns 0 and tells nobody', async () => {
+    await repo.create('todos', { title: 'a' });
+    const fn = vi.fn();
+    repo.onChange(fn);
+    expect(await repo.retryFailed()).toBe(0);
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('retryFailed({ onlyNetworkLike }) requeues only ops that failed on a network-looking reason', async () => {
+    for (const title of ['a', 'b', 'c', 'd', 'e']) await repo.create('todos', { title });
+    await markFailed(1, 'TypeError: Load failed');
+    await markFailed(2, 'TypeError: Failed to fetch');
+    await markFailed(3, 'TypeError: NetworkError when attempting to fetch resource.');
+    await markFailed(4, 'title cannot be empty');
+    await markFailed(5, 'invalid');
+    expect(await repo.retryFailed({ onlyNetworkLike: true })).toBe(3);
+    expect((await repo.failedOps()).map((o) => [o.seq, o.failed!.reason])).toEqual([
+      [4, 'title cannot be empty'],
+      [5, 'invalid'],
+    ]);
+  });
+
   it('onChange fires once per write and can be unsubscribed', async () => {
     const fn = vi.fn();
     const off = repo.onChange(fn);

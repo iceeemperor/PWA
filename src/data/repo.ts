@@ -1,5 +1,6 @@
 import type { IDBPTransaction } from 'idb';
 import { newId as defaultNewId } from '../domain/ids';
+import { isNetworkLikeMessage } from '../domain/network-errors';
 import type {
   CommonFields,
   FieldsOf,
@@ -78,6 +79,12 @@ export interface Repo {
   /** Queued ops still waiting to be uploaded (failed ones excluded). */
   pendingCount(): Promise<number>;
   failedOps(): Promise<QueuedOp[]>;
+  /**
+   * Puts failed ops back in the queue (clears `failed`), in one transaction; seq order and every other field stay.
+   * With `onlyNetworkLike`, only ops whose failure reason reads like a lost connection. Returns how many.
+   * Retrying an op the server really refused is harmless: the next sync marks it failed again.
+   */
+  retryFailed(o?: { onlyNetworkLike?: boolean }): Promise<number>;
   /** Called after every successful write. Returns the unsubscribe function. */
   onChange(fn: () => void): () => void;
   search(q: string, o?: SearchOptions): Promise<SearchHit[]>;
@@ -255,6 +262,34 @@ export function createRepo(db: LocalDb, deps: RepoDeps): Repo {
     async failedOps(): Promise<QueuedOp[]> {
       const queued: QueuedOp[] = await db.raw.getAll(QUEUE);
       return queued.filter((op) => op.failed !== null);
+    },
+
+    async retryFailed(o?: { onlyNetworkLike?: boolean }): Promise<number> {
+      const tx = db.raw.transaction(QUEUE, 'readwrite');
+      tx.done.catch(() => {});
+      let count = 0;
+      try {
+        let cursor = await tx.store.openCursor();
+        while (cursor) {
+          const op = cursor.value as QueuedOp;
+          if (op.failed !== null && (!o?.onlyNetworkLike || isNetworkLikeMessage(op.failed.reason))) {
+            await cursor.update({ ...op, failed: null });
+            count++;
+          }
+          cursor = await cursor.continue();
+        }
+        await tx.done;
+      } catch (e) {
+        try {
+          tx.abort();
+        } catch {
+          // already finished or aborted
+        }
+        await tx.done.catch(() => {});
+        throw new LocalWriteError('Could not save to local storage', { cause: e });
+      }
+      if (count > 0) notify();
+      return count;
     },
 
     onChange(fn) {

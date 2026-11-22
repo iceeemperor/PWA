@@ -72,6 +72,7 @@ export function Settings({ services }: SettingsProps) {
   const [importView, setImportView] = useState<ImportView | null>(null);
   const [failed, setFailed] = useState<QueuedOp[]>([]);
   const [failedLoaded, setFailedLoaded] = useState(false);
+  const [retrying, setRetrying] = useState(false);
 
   // Freshen the local data while the user reads the page, so the export click has little left to wait for.
   useEffect(() => {
@@ -101,6 +102,20 @@ export function Settings({ services }: SettingsProps) {
       offEngine();
     };
   }, [repo, engine]);
+
+  /** Puts every failed op back in the queue and syncs; ops the server refuses again come back to the list. */
+  async function retryAll() {
+    setRetrying(true);
+    try {
+      await repo.retryFailed();
+      await syncBestEffort(engine);
+    } catch {
+      // The list stays as it is; the user can try again.
+    } finally {
+      setRetrying(false);
+      setFailed(await repo.failedOps().catch(() => failed));
+    }
+  }
 
   async function exportJson() {
     setBusy('json');
@@ -219,16 +234,23 @@ export function Settings({ services }: SettingsProps) {
         {failedLoaded && failed.length === 0 ? (
           <p className="muted">没有同步失败的改动</p>
         ) : (
-          <ul className="failed-list">
-            {failed.map((op) => (
-              <li key={op.seq}>
-                <span className="muted">
-                  {`${TABLE_TEXT[op.table] ?? op.table} · ${KIND_TEXT[op.kind] ?? op.kind}`}
-                </span>
-                <span>{op.failed?.reason}</span>
-              </li>
-            ))}
-          </ul>
+          <>
+            {failed.length > 0 && (
+              <button type="button" disabled={retrying} onClick={() => void retryAll()}>
+                全部重试
+              </button>
+            )}
+            <ul className="failed-list">
+              {failed.map((op) => (
+                <li key={op.seq}>
+                  <span className="muted">
+                    {`${TABLE_TEXT[op.table] ?? op.table} · ${KIND_TEXT[op.kind] ?? op.kind}`}
+                  </span>
+                  <span>{op.failed?.reason}</span>
+                </li>
+              ))}
+            </ul>
+          </>
         )}
       </div>
     </section>

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { BackupFile, ImportSummary, PullPage, PushOp, PushResult } from '../domain/types';
+import { isNetworkLikeMessage } from '../domain/network-errors';
 import { CloudError, type CloudClient } from './cloud';
 
 interface ErrorLike {
@@ -7,17 +8,6 @@ interface ErrorLike {
   code?: unknown;
   message?: unknown;
   name?: unknown;
-}
-
-/**
- * The texts browsers give a fetch that never got a response (Safari, Chrome, Firefox, React Native), and the
- * abort/timeout names. postgrest-js turns such a failure into `{ message: "TypeError: Load failed", status: 0 }`.
- */
-export const NETWORK_ERROR_PATTERN = /load failed|failed to fetch|networkerror|network request failed|aborterror|timeouterror/i;
-
-/** True when the text reads like a request that never reached the server (for example a stored failure reason). */
-export function isNetworkLikeMessage(message: string): boolean {
-  return NETWORK_ERROR_PATTERN.test(message);
 }
 
 /**

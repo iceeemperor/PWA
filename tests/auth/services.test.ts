@@ -121,4 +121,22 @@ describe('createServices', () => {
     expect(t.auth.getUserId()).toBeNull();
     t.db.close();
   });
+
+  it('at start-up, requeues ops that failed on a network-looking reason; refused ones stay failed', async () => {
+    const db = await openLocalDb();
+    await db.raw.clear('queue');
+    const op = (reason: string) => ({
+      op_id: crypto.randomUUID(), table: 'todos', id: crypto.randomUUID(), kind: 'insert', base_rev: null,
+      fields: { title: 'x' }, failed: { reason },
+    });
+    await db.raw.add('queue', op('TypeError: Load failed'));
+    await db.raw.add('queue', op('title cannot be empty'));
+    await db.raw.add('queue', op('TypeError: Failed to fetch'));
+    db.close();
+    const s = await createServices(env());
+    expect((await s.repo.failedOps()).map((o) => o.failed!.reason)).toEqual(['title cannot be empty']);
+    expect(await s.repo.pendingCount()).toBe(2);
+    await s.db.raw.clear('queue');
+    s.db.close();
+  });
 });

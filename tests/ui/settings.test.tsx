@@ -306,4 +306,25 @@ describe('Settings: edges', () => {
     expect(await screen.findByText(/bad priority/)).toBeInTheDocument();
     expect(screen.getByText(/待办 · 修改/)).toBeInTheDocument();
   });
+
+  it('全部重试 shows only with failed ops; it requeues them, syncs and the list re-reads', async () => {
+    renderSettings();
+    expect(await screen.findByText('没有同步失败的改动')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '全部重试' })).toBeNull();
+
+    const r = await repo.create('todos', { title: 'x' });
+    const [queued] = (await db.raw.getAll('queue')) as QueuedOp[];
+    await db.raw.put('queue', { ...queued, failed: { reason: 'TypeError: Load failed' } });
+    await repo.update('todos', r.id, { title: 'y' }); // a write, so the list re-reads
+    expect(await screen.findByText('TypeError: Load failed')).toBeInTheDocument();
+    engine.sync.mockClear();
+    const retry = vi.spyOn(repo, 'retryFailed');
+
+    fireEvent.click(screen.getByRole('button', { name: '全部重试' }));
+    expect(await screen.findByText('没有同步失败的改动')).toBeInTheDocument();
+    expect(retry).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(engine.sync).toHaveBeenCalled());
+    expect(screen.queryByRole('button', { name: '全部重试' })).toBeNull();
+    expect(await repo.pendingCount()).toBe(2);
+  });
 });

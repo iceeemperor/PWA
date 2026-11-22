@@ -625,3 +625,31 @@ describe('push: an offline fetch failure as postgrest-js reports it (iPhone fiel
     expect((await rowOf(t, r.id)).title).toBe('offline edit');
   });
 });
+
+describe('push: requeued failed ops (recovery of the iPhone field bug)', () => {
+  it('a failed insert and its failed updates, all requeued, push in seq order and the updates are rebased', async () => {
+    const r = await a.repo.create('todos', { title: 'one' });
+    await a.repo.update('todos', r.id, { title: 'two' });
+    await a.repo.update('todos', r.id, { done: true });
+    // What the bug did: every push came back "rejected", so all three ops were marked failed.
+    flaky.failNext('rejected', 3);
+    expect(await a.engine.sync()).toMatchObject({ failed: 3 });
+    const stuck = await queue();
+    expect(stuck.map((o) => [o.kind, o.base_rev, o.failed !== null])).toEqual([
+      ['insert', null, true],
+      ['update', 0, true],
+      ['update', 0, true],
+    ]);
+
+    expect(await a.repo.retryFailed()).toBe(3);
+    const spy = vi.spyOn(flaky, 'push');
+    expect(await a.engine.sync()).toMatchObject({ outcome: 'ok', pushed: 3, failed: 0, conflicts: 0 });
+    const sent = spy.mock.calls.map(([op]) => op);
+    expect(sent.map((o) => o.op_id)).toEqual(stuck.map((o) => o.op_id));
+    const revs = await Promise.all(spy.mock.results.map(async (x) => ((await x.value) as PushResult).rev));
+    expect(sent.map((o) => o.base_rev)).toEqual([null, revs[0], revs[1]]);
+    expect(await queue()).toEqual([]);
+    const row = await rowOf(t, r.id);
+    expect([row.title, row.done]).toEqual(['two', true]);
+  });
+});

@@ -30,6 +30,16 @@ export class NotSignedInError extends Error {
   }
 }
 
+/** Requeues failed ops whose reason reads like a lost connection. Never throws: boot must not depend on it. */
+export async function requeueNetworkFailures(repo: Pick<Repo, 'retryFailed'>): Promise<number> {
+  try {
+    return await repo.retryFailed({ onlyNetworkLike: true });
+  } catch (e) {
+    console.error('Could not requeue failed ops', e);
+    return 0;
+  }
+}
+
 /** Builds the app's services. `openLocalDb`'s LocalDbUnavailableError propagates unchanged. */
 export async function createServices(env: ImportMetaEnv): Promise<Services> {
   const db = await openLocalDb();
@@ -47,6 +57,10 @@ export async function createServices(env: ImportMetaEnv): Promise<Services> {
       return id;
     },
   });
+  // Ops an earlier build marked failed on a lost connection (status-0 fetch errors) go back in the queue, before the
+  // engine counts it. Ops the server really refused stay failed for the user.
+  await requeueNetworkFailures(repo);
+
   const cloud = createSupabaseCloud(supabase);
   const deps: SyncDeps = { db, cloud };
   if (typeof navigator !== 'undefined' && navigator.locks) deps.locks = navigator.locks;
