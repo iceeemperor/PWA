@@ -46,6 +46,18 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+/**
+ * Waits for `done` by yielding event-loop turns (fake-indexeddb runs on setImmediate, which is never faked here), so
+ * neither real time nor the fake clock decides the outcome. Gives up after `turns` turns.
+ */
+async function settle(done: () => boolean | Promise<boolean>, turns = 2000): Promise<void> {
+  for (let i = 0; i < turns; i++) {
+    if (await done()) return;
+    await new Promise<void>((r) => setImmediate(r));
+  }
+  throw new Error(`not settled after ${turns} event-loop turns`);
+}
+
 async function clickText(text: string) {
   await userEvent.click(await screen.findByText(text));
 }
@@ -196,9 +208,12 @@ describe('Settings: edges', () => {
     await vi.advanceTimersByTimeAsync(PRE_EXPORT_SYNC_MS - 100);
     expect(saveFile).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(100);
-    await vi.waitFor(() => expect(saveFile).toHaveBeenCalledWith('productivity-app-backup-2026-11-05.json', expect.any(Blob)));
-    // Advancing the fake timers moves the frozen clock too.
-    await vi.waitFor(async () => expect(await db.getMeta('last_export_at')).toBe('2026-11-05T00:00:01.500Z'));
+    // F10: no vi.waitFor here, because under fake timers each of its polls moves the clock on, so the recorded time
+    // depended on load. settle() only yields event-loop turns: the clock stays at exactly 1500 ms.
+    await settle(() => vi.mocked(saveFile).mock.calls.length > 0);
+    expect(saveFile).toHaveBeenCalledWith('productivity-app-backup-2026-11-05.json', expect.any(Blob));
+    await settle(async () => (await db.getMeta('last_export_at')) !== undefined);
+    expect(await db.getMeta('last_export_at')).toBe('2026-11-05T00:00:01.500Z');
   });
 
   it('a sync that wins the race leaves no timer behind', async () => {
