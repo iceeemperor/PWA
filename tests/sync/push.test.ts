@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openLocalDb, type LocalDb } from '../../src/data/local-db';
 import { createRepo } from '../../src/data/repo';
 import type { PushOp, PushResult, QueuedOp, TodoRecord } from '../../src/domain/types';
+import { CloudError } from '../../src/sync/cloud';
 import { createSyncEngine, type SyncStatus } from '../../src/sync/engine';
 import {
   TEST_USER_A,
@@ -493,11 +494,96 @@ describe('push: two tabs on one browser', () => {
   it('a second run after the first one finished starts afresh', async () => {
     await a.repo.create('todos', { title: 'x' });
     const first = a.engine.sync();
-    expect(a.engine.sync()).toBe(first);
+    // F2: a call during the run gets the follow-up run, not the running one.
+    const during = a.engine.sync();
+    expect(during).not.toBe(first);
     await first;
+    await during;
     await a.repo.create('todos', { title: 'y' });
     const second = a.engine.sync();
     expect(second).not.toBe(first);
+    expect(second).not.toBe(during);
     expect(await second).toMatchObject({ pushed: 1 });
+  });
+});
+
+describe('sync(): a call during a run gets a follow-up run (F2)', () => {
+  /** Holds the next pull after the cloud answered it (so the run already has its page) until `release()`. */
+  function holdNextPull() {
+    const orig = flaky.pull;
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const inPull = new Promise<void>((r) => (started = r));
+    vi.spyOn(flaky, 'pull').mockImplementationOnce(async (since, limit) => {
+      const page = await orig(since, limit);
+      started();
+      await gate;
+      return page;
+    });
+    return { inPull, release };
+  }
+
+  it('a write made during the pull phase is pushed without another trigger', async () => {
+    const hold = holdNextPull();
+    const first = a.engine.sync();
+    await hold.inPull;
+    await a.repo.create('todos', { title: 'mid-run' });
+    const late = a.engine.sync();
+    hold.release();
+    expect((await first).pushed).toBe(0);
+    expect(await late).toMatchObject({ outcome: 'ok', pushed: 1 });
+    expect(await a.repo.pendingCount()).toBe(0);
+    expect(await cloudRowCount()).toBe(1);
+  });
+
+  it('rows that reach the cloud during a run (an import, another device) are pulled by the follow-up', async () => {
+    const other = await createDevice({ name: 'other', cloud: createPgliteCloud(t, U), userId: U }); opened.push(other.db);
+    const hold = holdNextPull();
+    const first = a.engine.sync();
+    await hold.inPull;
+    const r = await other.repo.create('todos', { title: 'imported' });
+    await other.engine.sync();
+    const late = a.engine.sync();
+    hold.release();
+    await first;
+    expect((await late).pulled).toBeGreaterThanOrEqual(1);
+    expect((await a.repo.get('todos', r.id))?.title).toBe('imported');
+  });
+
+  it('many calls during one run share exactly one follow-up run', async () => {
+    const hold = holdNextPull();
+    const first = a.engine.sync();
+    await hold.inPull;
+    const lates = [a.engine.sync(), a.engine.sync(), a.engine.sync()];
+    expect(lates[1]).toBe(lates[0]);
+    expect(lates[2]).toBe(lates[0]);
+    hold.release();
+    await first;
+    await Promise.all(lates);
+    expect(flaky.pull).toHaveBeenCalledTimes(2);
+  });
+
+  it('no call during the run: no follow-up', async () => {
+    const spy = vi.spyOn(flaky, 'pull');
+    await a.engine.sync();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('a run that did not end ok gets no follow-up; the late caller gets its report', async () => {
+    await a.repo.create('todos', { title: 'x' });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    vi.spyOn(flaky, 'push').mockImplementationOnce(async () => {
+      await gate;
+      throw new CloudError('network');
+    });
+    const first = a.engine.sync();
+    const late = a.engine.sync();
+    release();
+    expect(await late).toMatchObject({ outcome: 'offline' });
+    expect(await first).toMatchObject({ outcome: 'offline' });
+    expect(flaky.push).toHaveBeenCalledTimes(1);
   });
 });

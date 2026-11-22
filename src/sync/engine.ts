@@ -38,7 +38,11 @@ export interface SyncDeps {
 }
 
 export interface SyncEngine {
-  /** Pushes the queue, then (if the push was not stopped) pulls every page. A call while a run is going returns that run. */
+  /**
+   * Pushes the queue, then (if the push was not stopped) pulls every page. A call while a run is going gets one
+   * follow-up run after it (shared by every call made during that run), so whatever was queued or reached the cloud
+   * before the call is covered; it gets the first run's report instead when that run did not end ok.
+   */
   sync(): Promise<SyncReport>;
   status(): SyncStatus;
   /** `fn` is called on every status change and after every run. Returns the unsubscribe function. */
@@ -102,6 +106,8 @@ export function createSyncEngine(deps: SyncDeps): SyncEngine {
   const listeners = new Set<(s: SyncStatus) => void>();
   let current: SyncStatus = { state: 'idle', pending: 0, failed: 0, lastSyncedAt: null, conflicts: 0 };
   let running: Promise<SyncReport> | null = null;
+  // The run promised to the calls that arrived while `running` was going.
+  let followUp: Promise<SyncReport> | null = null;
 
   function setStatus(patch: Partial<SyncStatus>): void {
     current = { ...current, ...patch };
@@ -380,8 +386,20 @@ export function createSyncEngine(deps: SyncDeps): SyncEngine {
 
   return {
     sync() {
-      running ??= guarded();
-      return running;
+      if (!running) return (running = guarded());
+      followUp ??= running.then(
+        (report) => {
+          followUp = null;
+          // A stopped run (offline, expired ...) would stop again; the triggers retry it.
+          if (report.outcome !== 'ok') return report;
+          return (running ??= guarded());
+        },
+        (e: unknown) => {
+          followUp = null;
+          throw e;
+        },
+      );
+      return followUp;
     },
     status: () => current,
     subscribe(fn) {
