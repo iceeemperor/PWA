@@ -49,9 +49,42 @@ describe('createSupabaseAuth: signIn', () => {
     ['server error', new AuthApiError('boom', 500, 'unexpected_failure'), 'unknown'],
   ] as const)('maps %s', async (_n, error, reason) => {
     const returned = createSupabaseAuth(fakeClient({ signIn: async () => ({ data: { session: null }, error }) }).client);
-    expect(await returned.signIn('a@b.c', 'x')).toEqual({ ok: false, reason });
+    expect(await returned.signIn('a@b.c', 'x')).toMatchObject({ ok: false, reason });
     const thrown = createSupabaseAuth(fakeClient({ signIn: async () => { throw error; } }).client);
-    expect(await thrown.signIn('a@b.c', 'x')).toEqual({ ok: false, reason });
+    expect(await thrown.signIn('a@b.c', 'x')).toMatchObject({ ok: false, reason });
+  });
+
+  it('an unknown failure carries the server message and code as detail; the others carry none', async () => {
+    const error = new AuthApiError('Email logins are disabled', 422, 'email_provider_disabled');
+    const a = createSupabaseAuth(fakeClient({ signIn: async () => ({ data: { session: null }, error }) }).client);
+    expect(await a.signIn('a@b.c', 'x')).toEqual({
+      ok: false,
+      reason: 'unknown',
+      detail: 'Email logins are disabled [email_provider_disabled]',
+    });
+    const thrown = createSupabaseAuth(fakeClient({ signIn: async () => { throw new Error('boom'); } }).client);
+    expect(await thrown.signIn('a@b.c', 'x')).toEqual({ ok: false, reason: 'unknown', detail: 'boom' });
+    const bad = new AuthApiError('Invalid login credentials', 400, 'invalid_credentials');
+    const b = createSupabaseAuth(fakeClient({ signIn: async () => ({ data: { session: null }, error: bad }) }).client);
+    expect(await b.signIn('a@b.c', 'x')).toEqual({ ok: false, reason: 'invalid_credentials' });
+    const off = createSupabaseAuth(fakeClient({ signIn: async () => { throw new TypeError('Load failed'); } }).client);
+    expect(await off.signIn('a@b.c', 'x')).toEqual({ ok: false, reason: 'network' });
+  });
+
+  it('the detail is capped at 120 characters and never contains the email or password', async () => {
+    const long = new AuthApiError('x'.repeat(300), 500, 'unexpected_failure');
+    const a = createSupabaseAuth(fakeClient({ signIn: async () => ({ data: { session: null }, error: long }) }).client);
+    const r = await a.signIn('a@b.c', 'pw');
+    expect(r.ok === false && r.reason === 'unknown' && r.detail!.length).toBe(120);
+
+    const echo = new AuthApiError('User me@example.com with password hunter22 is banned', 400, 'user_banned');
+    const b = createSupabaseAuth(fakeClient({ signIn: async () => ({ data: { session: null }, error: echo }) }).client);
+    const r2 = await b.signIn('me@example.com', 'hunter22');
+    expect(r2).toMatchObject({ ok: false, reason: 'unknown' });
+    const detail = r2.ok === false && r2.reason === 'unknown' ? r2.detail! : '';
+    expect(detail).toContain('is banned');
+    expect(detail).not.toContain('me@example.com');
+    expect(detail).not.toContain('hunter22');
   });
 });
 

@@ -58,6 +58,15 @@ describe('App: login and session (brief)', () => {
     }
   });
 
+  it('an unknown sign-in failure shows the server detail after the generic text', async () => {
+    auth = createFakeAuth(null);
+    render(<App services={{ ...services, auth }} />);
+    await screen.findByLabelText('邮箱');
+    auth.setSignInResult({ ok: false, reason: 'unknown', detail: 'Email logins are disabled' });
+    await submitLogin();
+    expect(await screen.findByText('登录失败，请稍后再试（Email logins are disabled）')).toBeInTheDocument();
+  });
+
   it('session expiry returns to login with a notice and keeps the unsynced queue', async () => {
     render(<App services={services} />);
     await repo.create('todos', { title: 'x' });

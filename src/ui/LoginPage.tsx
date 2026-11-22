@@ -9,6 +9,8 @@ const FAILURE_TEXT: Record<Exclude<Exclude<SignInResult, { ok: true }>['reason']
 
 function failureText(r: Exclude<SignInResult, { ok: true }>): string {
   if (r.reason === 'other_account') return `此设备上还有另一个账号的 ${r.pending} 项未同步改动，请先用原账号登录完成同步`;
+  // The server's own words help tell "logins disabled" from "server down"; only for failures we cannot name.
+  if (r.reason === 'unknown' && r.detail) return `${FAILURE_TEXT.unknown}（${r.detail}）`;
   return FAILURE_TEXT[r.reason];
 }
 

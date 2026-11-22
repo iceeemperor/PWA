@@ -2,7 +2,9 @@ import { isAuthApiError, isAuthError, isAuthRetryableFetchError, type Session, t
 
 export type SignInResult =
   | { ok: true }
-  | { ok: false; reason: 'invalid_credentials' | 'network' | 'unknown' }
+  | { ok: false; reason: 'invalid_credentials' | 'network' }
+  /** `detail`: the server's message and code, for the user to report (never the email or password). */
+  | { ok: false; reason: 'unknown'; detail?: string }
   /** The account is not this device's owner and the owner still has `pending` ops queued here (F3). */
   | { ok: false; reason: 'other_account'; pending: number };
 
@@ -56,6 +58,28 @@ function classify(error: unknown): CredentialFailure {
 }
 
 type AuthClient = Pick<SupabaseClient, 'auth'>;
+
+/** Longest `detail` an unknown sign-in failure carries. */
+export const DETAIL_MAX = 120;
+
+/** The error's message and code, with the email and password blanked out, at most DETAIL_MAX characters. */
+function detailOf(error: unknown, email: string, password: string): string | undefined {
+  const e = typeof error === 'object' && error !== null ? (error as { message?: unknown; code?: unknown }) : {};
+  const message = typeof e.message === 'string' ? e.message : typeof error === 'string' ? error : '';
+  const code = typeof e.code === 'string' && e.code !== '' && !message.includes(e.code) ? e.code : '';
+  let text = [message.trim(), code ? `[${code}]` : ''].filter(Boolean).join(' ');
+  for (const secret of [email, email.trim(), password]) {
+    if (secret) text = text.split(secret).join('…');
+  }
+  return text ? text.slice(0, DETAIL_MAX) : undefined;
+}
+
+function failure(error: unknown, email: string, password: string): SignInResult {
+  const reason = classify(error);
+  if (reason !== 'unknown') return { ok: false, reason };
+  const detail = detailOf(error, email, password);
+  return detail ? { ok: false, reason, detail } : { ok: false, reason };
+}
 
 /** A failure to reach the auth server, as opposed to the server refusing the session. */
 function isNetworkError(error: unknown): boolean {
@@ -157,10 +181,10 @@ export function createSupabaseAuth(client: AuthClient, opts: SupabaseAuthOptions
     async signIn(email, password) {
       try {
         const { error } = await client.auth.signInWithPassword({ email, password });
-        if (error) return { ok: false, reason: classify(error) };
+        if (error) return failure(error, email, password);
         return { ok: true };
       } catch (e) {
-        return { ok: false, reason: classify(e) };
+        return failure(e, email, password);
       }
     },
 
