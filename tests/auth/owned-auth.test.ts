@@ -190,3 +190,44 @@ describe('sign-out is recorded before the slow auth call (bug: closed during a ~
     expect(auth.getUserId()).toBeNull();
   });
 });
+
+describe('sign-in and sign-out overlapping', () => {
+  async function slow() {
+    const s = await setup({ initial: A });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const real = s.inner.signOut.bind(s.inner);
+    s.inner.signOut = async () => {
+      await gate;
+      await real();
+    };
+    return { ...s, release };
+  }
+
+  it('a sign-in during a slow sign-out waits for it and ends up signed in', async () => {
+    const { inner, auth, release } = await slow();
+    const seen: unknown[] = [];
+    auth.onSessionChange((x) => seen.push(x));
+    const out = auth.signOut();
+    await vi.waitFor(() => expect(seen).toHaveLength(1));
+    inner.setSignInUser(A);
+    const inn = auth.signIn('a@b.c', 'pw');
+    release();
+    await out;
+    expect(await inn).toEqual({ ok: true });
+    await vi.waitFor(() => expect(auth.getUserId()).toBe(A));
+    expect(seen).toEqual([{ userId: null, expired: false }, { userId: A, expired: false }]);
+  });
+
+  it('two concurrent sign-outs emit once', async () => {
+    const { auth, release } = await slow();
+    const seen: unknown[] = [];
+    auth.onSessionChange((x) => seen.push(x));
+    const a = auth.signOut();
+    const b = auth.signOut();
+    release();
+    await Promise.all([a, b]);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(seen).toEqual([{ userId: null, expired: false }]);
+  });
+});

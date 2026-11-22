@@ -10,8 +10,9 @@ export function createOwnedAuth(inner: SupabaseAuth, owner: OwnerStore): Supabas
   let userId: string | null = null;
   // Set while this wrapper signs a refused user out again, so that sign-out is not taken as the user's own.
   let refusing = false;
-  // Set while an explicit signOut() already recorded and announced the sign-out, so its SIGNED_OUT event adds nothing.
-  let signOutAnnounced = false;
+  // The explicit signOut() in flight, if any. It records and announces the sign-out itself, so the SIGNED_OUT event that
+  // arrives while it runs adds nothing; signIn() waits for it so a new session is never mistaken for the old one's end.
+  let signingOut: Promise<void> | null = null;
   const listeners = new Set<(s: SessionChange) => void>();
   const inflight = new Map<string, Promise<AdoptResult>>();
 
@@ -50,7 +51,7 @@ export function createOwnedAuth(inner: SupabaseAuth, owner: OwnerStore): Supabas
     if (s.userId === null) {
       if (refusing) return;
       userId = null;
-      if (signOutAnnounced) return;
+      if (signingOut) return;
       if (!s.expired) owner.signedOut().catch((e: unknown) => console.error('Could not record the sign-out', e));
       emit(s);
       return;
@@ -78,6 +79,7 @@ export function createOwnedAuth(inner: SupabaseAuth, owner: OwnerStore): Supabas
     ready,
 
     async signIn(email, password): Promise<SignInResult> {
+      if (signingOut) await signingOut.catch(() => {});
       const r = await inner.signIn(email, password);
       if (!r.ok) return r;
       const id = inner.getUserId();
@@ -93,24 +95,27 @@ export function createOwnedAuth(inner: SupabaseAuth, owner: OwnerStore): Supabas
       return r;
     },
 
-    async signOut() {
-      // Record it first: the auth call can take ~25 s offline with an expired token, and an app closed meanwhile
-      // must not reopen as the signed-in owner. The UI leaves at once too, instead of looking dead.
-      try {
-        await owner.signedOut();
-      } catch (e) {
-        console.error('Could not record the sign-out', e);
-      }
-      if (userId !== null) {
-        userId = null;
-        signOutAnnounced = true;
-        emit({ userId: null, expired: false });
-      }
-      try {
+    signOut() {
+      // Concurrent calls share one sign-out.
+      if (signingOut) return signingOut;
+      const run = (async () => {
+        // Record it first: the auth call can take ~25 s offline with an expired token, and an app closed meanwhile
+        // must not reopen as the signed-in owner. The UI leaves at once too, instead of looking dead.
+        try {
+          await owner.signedOut();
+        } catch (e) {
+          console.error('Could not record the sign-out', e);
+        }
+        if (userId !== null) {
+          userId = null;
+          emit({ userId: null, expired: false });
+        }
         await inner.signOut();
-      } finally {
-        signOutAnnounced = false;
-      }
+      })().finally(() => {
+        if (signingOut === run) signingOut = null;
+      });
+      signingOut = run;
+      return run;
     },
 
     getUserId: () => userId,

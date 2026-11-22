@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { isWellFormed } from '../../src/data/validate-fields';
 
 const HI = String.fromCharCode(0xd800);
@@ -20,8 +20,6 @@ const CASES: [string, string, boolean][] = [
 ];
 
 describe('isWellFormed', () => {
-  afterEach(() => vi.unstubAllGlobals());
-
   it.each(CASES)('native: %s', (_n, s, ok) => expect(isWellFormed(s)).toBe(ok));
 
   it.each(CASES)('regex fallback (no String.prototype.isWellFormed): %s', (_n, s, ok) => {
