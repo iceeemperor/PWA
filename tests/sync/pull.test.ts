@@ -217,6 +217,23 @@ describe('pull: applying rows', () => {
     expect(await h.repo.get('todos', r.id)).toBeUndefined();
     expect(h.engine.status()).toMatchObject({ pending: 1 });
   });
+  it('ops dropped by a pulled tombstone are counted in report.dropped (F6, spec 8.2 已被永久清除)', async () => {
+    const r = await b.repo.create('todos', { title: 'x' }); await b.engine.sync();
+    const other = await b.repo.create('todos', { title: 'other' }); await b.engine.sync();
+    let hook: (() => Promise<unknown>) | undefined;
+    const hooked: CloudClient = { ...cloud, pull: async (s, l) => { await hook?.(); return cloud.pull(s, l); } };
+    const h = await device({ name: 'hooked', cloud: hooked }); await h.engine.sync();
+    await makeTombstone(r.id);
+    hook = async () => {
+      await h.repo.update('todos', r.id, { title: 'late' });
+      await h.repo.update('todos', r.id, { done: true });
+      await h.repo.update('todos', other.id, { title: 'kept' });
+    };
+    expect(await h.engine.sync()).toMatchObject({ outcome: 'ok', dropped: 2 });
+    hook = undefined;
+    // Nothing was dropped on the next run: the count is per run, not cumulative.
+    expect(await h.engine.sync()).toMatchObject({ dropped: 0, pushed: 1 });
+  });
   it('pending ops overlay the pulled row in seq order and keep their base_rev', async () => {
     const r = await b.repo.create('todos', { title: 'x' }); await b.engine.sync();
     let hook: (() => Promise<unknown>) | undefined;

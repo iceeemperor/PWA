@@ -241,9 +241,9 @@ export function createSyncEngine(deps: SyncDeps): SyncEngine {
   /**
    * Applies one pull page and moves the cursor, in ONE transaction over every table, the queue and meta, so the
    * cursor never gets ahead of (or behind) the records it stands for. Only IndexedDB requests are awaited inside.
-   * Returns how many rows were applied.
+   * Returns how many rows were applied, and how many pending ops a pulled tombstone discarded.
    */
-  async function applyPage(page: PullPage, pageMaxRev: number): Promise<number> {
+  async function applyPage(page: PullPage, pageMaxRev: number): Promise<{ applied: number; dropped: number }> {
     const tx = db.raw.transaction([...TABLES, QUEUE, META], 'readwrite');
     tx.done.catch(() => {});
     try {
@@ -259,6 +259,7 @@ export function createSyncEngine(deps: SyncDeps): SyncEngine {
       }
 
       let applied = 0;
+      let dropped = 0;
       for (const { table, row } of page.rows) {
         if (!(TABLES as readonly string[]).includes(table)) continue;
         const store = tx.objectStore(table);
@@ -270,6 +271,8 @@ export function createSyncEngine(deps: SyncDeps): SyncEngine {
         if (server.purged_at !== null) {
           // A tombstone wins over anything still queued for the record.
           for (const op of ops) await queue.delete(op.seq);
+          // The user is told these edits were lost to a purge (spec 8.2, 已被永久清除).
+          dropped += ops.length;
           pending.delete(key);
           await store.put(server);
         } else if (ops.length > 0) {
@@ -284,7 +287,7 @@ export function createSyncEngine(deps: SyncDeps): SyncEngine {
       const cursor = Number((await meta.get(CURSOR)) ?? 0);
       if (pageMaxRev > cursor) await meta.put(pageMaxRev, CURSOR);
       await tx.done;
-      return applied;
+      return { applied, dropped };
     } catch (e) {
       try { tx.abort(); } catch { /* already finished */ }
       await tx.done.catch(() => {});
@@ -307,7 +310,9 @@ export function createSyncEngine(deps: SyncDeps): SyncEngine {
         return e.kind === 'rejected' ? 'unavailable' : STOPS[e.kind];
       }
       const pageMaxRev = page.rows.reduce((m, r) => Math.max(m, Number(r.row.rev)), since);
-      report.pulled += await applyPage(page, pageMaxRev);
+      const done = await applyPage(page, pageMaxRev);
+      report.pulled += done.applied;
+      report.dropped += done.dropped;
       // An empty page cannot move `since`; stop rather than ask for the same page forever.
       if (!page.has_more || page.rows.length === 0) return null;
       since = pageMaxRev;
