@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createServices, type Services } from '../app/services';
 import type { SessionChange } from '../auth/auth';
 import { LocalDbUnavailableError } from '../data/local-db';
@@ -6,6 +6,7 @@ import { startSyncTriggers } from '../sync/triggers';
 import { LoginPage } from './LoginPage';
 import { Shell } from './Shell';
 import { UnavailableScreen } from './UnavailableScreen';
+import { UpdatePrompt } from './UpdatePrompt';
 
 // One boot per page load, so StrictMode's double effects do not open a second database or auth listener.
 let boot: Promise<Services> | null = null;
@@ -19,18 +20,30 @@ type RootState = { kind: 'loading' } | { kind: 'ready'; services: Services } | {
 /** Builds the services, then shows the app; a failed start shows why. `create` replaces the real boot in tests. */
 export function Root({ create }: { create?: () => Promise<Services> } = {}) {
   const [state, setState] = useState<RootState>({ kind: 'loading' });
+  // Boot once per mount: a new `create` function on a re-render must not start another boot.
+  const createRef = useRef(create);
 
   useEffect(() => {
     let live = true;
-    (create ?? bootServices)().then(
+    (createRef.current ?? bootServices)().then(
       (services) => live && setState({ kind: 'ready', services }),
       (error: unknown) => live && setState({ kind: 'error', error }),
     );
     return () => {
       live = false;
     };
-  }, [create]);
+  }, []);
 
+  // The update prompt sits outside every state, so even a version stuck on boot, an error or login can be replaced.
+  return (
+    <>
+      <UpdatePrompt />
+      <RootBody state={state} />
+    </>
+  );
+}
+
+function RootBody({ state }: { state: RootState }) {
   if (state.kind === 'loading') return <div className="boot">正在启动…</div>;
   if (state.kind === 'error') {
     if (state.error instanceof LocalDbUnavailableError) return <UnavailableScreen />;

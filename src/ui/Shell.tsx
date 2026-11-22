@@ -2,7 +2,6 @@ import { useState } from 'react';
 import type { Services } from '../app/services';
 import { SyncBanner } from './SyncBanner';
 import { TodosTemp } from './TodosTemp';
-import { UpdatePrompt } from './UpdatePrompt';
 import { useSyncStatus } from './useSyncStatus';
 
 type Tab = 'todos' | 'settings';
@@ -20,7 +19,7 @@ export interface ShellProps {
 
 const defaultConfirm = (msg: string) => window.confirm(msg);
 
-/** The signed-in frame: sync state and update prompt on top, bottom navigation on phones, side navigation from 768px. */
+/** The signed-in frame: sync state on top, bottom navigation on phones, side navigation from 768px. */
 export function Shell({ services, confirmFn = defaultConfirm }: ShellProps) {
   const { repo, engine, auth } = services;
   const [tab, setTab] = useState<Tab>('todos');
@@ -59,7 +58,6 @@ export function Shell({ services, confirmFn = defaultConfirm }: ShellProps) {
             退出登录
           </button>
         </header>
-        <UpdatePrompt />
         <main className="content">
           {tab === 'todos' ? (
             <TodosTemp repo={repo} engine={engine} />
