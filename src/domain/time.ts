@@ -11,13 +11,23 @@ export function deviceTimeZone(): string {
 /** A zone name Intl knows (an IANA zone such as Asia/Shanghai, or UTC). */
 export function isTimeZone(tz: string): boolean {
   if (typeof tz !== 'string' || tz === '') return false;
+  const known = zoneAnswers.get(tz);
+  if (known !== undefined) return known;
+  let ok: boolean;
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: tz });
-    return true;
+    ok = true;
   } catch {
-    return false;
+    ok = false;
   }
+  // Names can come from a file, so the cache has a ceiling.
+  if (zoneAnswers.size >= 1000) zoneAnswers.clear();
+  zoneAnswers.set(tz, ok);
+  return ok;
 }
+
+// Building an Intl formatter is slow; a backup of many events asks about the same few zones again and again.
+const zoneAnswers = new Map<string, boolean>();
 
 const formatters = new Map<string, Intl.DateTimeFormat>();
 

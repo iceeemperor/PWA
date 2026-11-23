@@ -60,6 +60,21 @@ describe('importBackup: the brief', () => {
     expect(res).toMatchObject({ ok: true, summary: { added: 2 } }); const c = await device('c', cloudB); await c.engine.sync();
     expect(await exportable(c)).toEqual(await exportable(a));
   });
+  it('round trip with events: export from one device, import into an empty account, sync another device, same data', async () => {
+    const a = await device('a', cloudA);
+    await a.repo.create('todos', { title: 'one' });
+    const ev = await a.repo.create('events', { title: 'call', all_day: false, starts_at: '2026-11-23T09:00', ends_at: '2026-11-23T10:00', tz: 'Asia/Shanghai', important: true });
+    const gone = await a.repo.create('events', { title: 'old', starts_at: '2026-11-20' });
+    await a.repo.remove('events', gone.id);
+    await a.engine.sync();
+    const text = JSON.stringify(await buildBackup(a.db));
+    const res = await importBackup(cloudB, text, { restorePurged: false });
+    expect(res).toMatchObject({ ok: true, summary: { added: 3 } });
+    const c = await device('c', cloudB); await c.engine.sync();
+    const tables = await exportable(c);
+    expect(tables.events.map((r) => r.id).sort()).toEqual([ev.id, gone.id].sort());
+    expect(tables).toEqual(await exportable(a));
+  });
   it('importing the same file twice skips everything the second time', async () => {
     const { text } = await exportFromA();
     await importBackup(cloudB, text, { restorePurged: false }); const r = await importBackup(cloudB, text, { restorePurged: false });

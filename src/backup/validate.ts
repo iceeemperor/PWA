@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { isStorableText, isCalendarDate, isCreatedAt, isNonBlank } from '../data/validate-fields';
+import { validateEventFields } from '../data/validate-event-fields';
 import { isUuid } from '../domain/ids';
 import {
   BACKUP_FORMAT,
@@ -7,6 +8,7 @@ import {
   BACKUP_VERSION,
   type BackupFile,
   type BackupTableKey,
+  type EventFields,
 } from '../domain/types';
 
 export type ValidationResult = { ok: true; backup: BackupFile } | { ok: false; errors: string[] };
@@ -16,7 +18,7 @@ export const MAX_VALIDATION_ERRORS = 20;
 /** child table -> { column -> parent table }. Empty in stage 1; stage 3 adds event_overrides. */
 export const REFERENCES: Record<string, Record<string, string>> = {};
 
-const SUPPORTED_TABLES: readonly BackupTableKey[] = ['todos'];
+const SUPPORTED_TABLES: readonly BackupTableKey[] = ['todos', 'events'];
 
 const datetime = z.iso.datetime({ offset: true });
 
@@ -41,7 +43,32 @@ const todoSchema = z.strictObject({
   deleted_at: datetime.nullable(),
 });
 
-const rowSchemas: Partial<Record<BackupTableKey, z.ZodType>> = { todos: todoSchema };
+// An event row: the common fields, then every EventFields key (no more, no fewer), and the whole row goes to the same
+// function the Repo uses. Its messages name the rule, never the value, so an error never echoes the file's contents.
+const EVENT_KEYS = ['title', 'all_day', 'starts_at', 'ends_at', 'tz', 'note', 'important', 'done', 'rrule'] as const satisfies readonly (keyof EventFields)[];
+const eventSchema = z
+  .strictObject({
+    id: z.string().refine(isUuid, 'must be a UUID'),
+    created_at: datetime.refine(isCreatedAt, 'must lie between the years 2000 and 9999'),
+    updated_at: datetime,
+    deleted_at: datetime.nullable(),
+    ...(Object.fromEntries(EVENT_KEYS.map((k) => [k, z.unknown()])) as Record<(typeof EVENT_KEYS)[number], z.ZodUnknown>),
+  })
+  .superRefine((row, ctx) => {
+    // z.unknown() lets a missing key through; a backup row must carry every field.
+    const missing = EVENT_KEYS.filter((k) => !Object.hasOwn(row, k));
+    if (missing.length > 0) {
+      ctx.addIssue({ code: 'custom', message: `missing field(s) ${missing.join(', ')}` });
+      return;
+    }
+    try {
+      validateEventFields(row as unknown as EventFields);
+    } catch (e) {
+      ctx.addIssue({ code: 'custom', message: e instanceof Error ? e.message : 'is not a valid event' });
+    }
+  });
+
+const rowSchemas: Partial<Record<BackupTableKey, z.ZodType>> = { todos: todoSchema, events: eventSchema };
 
 /** Key names come from the file: long ones are cut so an error message stays readable. */
 const MAX_KEY_IN_MESSAGE = 40;

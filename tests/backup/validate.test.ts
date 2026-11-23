@@ -25,6 +25,25 @@ const withTodos = (todos: unknown[]) => ({
   exported_at: '2026-11-05T12:00:00.000Z',
   tables: { events: [], event_overrides: [], todos, notes: [], journal: [] },
 });
+const event = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  id: crypto.randomUUID(),
+  title: 'Standup',
+  all_day: true,
+  starts_at: '2026-11-23',
+  ends_at: null,
+  tz: null,
+  note: '',
+  important: false,
+  done: false,
+  rrule: null,
+  created_at: '2026-11-05T10:00:00.000Z',
+  updated_at: '2026-11-05T10:00:00.000Z',
+  deleted_at: null,
+  ...over,
+});
+const timedEvent = (over: Record<string, unknown> = {}) => event({ all_day: false, starts_at: '2026-11-23T09:00', tz: 'Asia/Shanghai', ...over });
+const withEvents = (events: unknown[]) => ({ ...withTodos([]), tables: { ...withTodos([]).tables, events } });
+const withEvent = (over: Record<string, unknown>) => withEvents([event(over)]);
 const valid = () => withTodos([todo()]);
 const withTodo = (over: Record<string, unknown>) => withTodos([todo(over)]);
 const errorsOf = (r: ReturnType<typeof validateBackup>) => (r.ok ? [] : r.errors);
@@ -53,8 +72,50 @@ describe('validateBackup', () => {
     expect(validateBackup(withTodos([t, t]))).toMatchObject({ ok: false, errors: [expect.stringContaining('duplicate')] });
   });
   it('rejects tables that have rows but are not supported yet, and accepts empty ones', () => {
-    expect(validateBackup({ ...valid(), tables: { ...valid().tables, events: [{}] } })).toMatchObject({ ok: false });
+    expect(validateBackup({ ...valid(), tables: { ...valid().tables, event_overrides: [{}] } })).toMatchObject({ ok: false });
+    expect(validateBackup({ ...valid(), tables: { ...valid().tables, notes: [{}] } })).toMatchObject({ ok: false });
+    expect(validateBackup({ ...valid(), tables: { ...valid().tables, journal: [{}] } })).toMatchObject({ ok: false });
     expect(validateBackup(valid())).toMatchObject({ ok: true });
+  });
+  it('accepts a file with events, keeping them, and still rejects rows in event_overrides, notes and journal', () => {
+    const r = validateBackup(withEvents([event(), timedEvent({ ends_at: '2026-11-23T10:00', deleted_at: '2026-11-06T10:00:00.000Z' })]));
+    expect(r).toMatchObject({ ok: true });
+    if (r.ok) expect(r.backup.tables.events).toHaveLength(2);
+    expect(validateBackup({ ...withEvents([event()]), tables: { ...withEvents([event()]).tables, event_overrides: [{}] } })).toMatchObject({ ok: false });
+  });
+  it('rejects an event with an end before its start, naming the row', () =>
+    expect(validateBackup(withEvent({ starts_at: '2026-11-23', ends_at: '2026-11-22' }))).toMatchObject({ ok: false, errors: [expect.stringContaining('events[0]')] }));
+  it('rejects an event row with an unknown or server-managed key, or a missing key', () => {
+    for (const bad of [event({ extra: 1 }), event({ user_id: ID }), event({ rev: 1 }), event({ purged_at: null })]) {
+      expect(validateBackup(withEvents([bad]))).toMatchObject({ ok: false, errors: [expect.stringMatching(/^events\[0\]: unknown field/)] });
+    }
+    for (const k of ['title', 'all_day', 'starts_at', 'ends_at', 'tz', 'note', 'important', 'done', 'rrule', 'id', 'created_at', 'updated_at', 'deleted_at']) {
+      const { [k]: _gone, ...rest } = event();
+      expect(validateBackup(withEvents([rest])), k).toMatchObject({ ok: false, errors: [expect.stringMatching(/^events\[0\]/)] });
+    }
+  });
+  it('rejects bad common fields on an event', () => {
+    expect(validateBackup(withEvent({ id: '123' }))).toMatchObject({ ok: false });
+    expect(validateBackup(withEvent({ created_at: '1999-01-01T00:00:00Z' }))).toMatchObject({ ok: false });
+    expect(validateBackup(withEvent({ updated_at: 'x' }))).toMatchObject({ ok: false });
+    expect(validateBackup(withEvent({ deleted_at: 5 }))).toMatchObject({ ok: false });
+  });
+  it('rejects the client-only cases (impossible date, unknown zone, repeat rule) in a backup', () => {
+    expect(validateBackup(withEvent({ starts_at: '2026-02-30' }))).toMatchObject({ ok: false });
+    expect(validateBackup(withEvents([timedEvent({ tz: 'Mars/Base' })]))).toMatchObject({ ok: false });
+    expect(validateBackup(withEvent({ rrule: 'FREQ=DAILY' }))).toMatchObject({ ok: false });
+  });
+  it('event errors name the row, never the value, and share the error cap and key-name cut', () => {
+    const r = validateBackup(withEvents([event(), event({ title: 'secret-value', starts_at: 'secret-start' })]));
+    expect(errorsOf(r)[0]).toMatch(/^events\[1\]: /);
+    expect(errorsOf(r).join()).not.toContain('secret');
+    const many = validateBackup(withEvents(Array.from({ length: 100 }, () => ({ ...event(), id: 'bad' }))));
+    expect(errorsOf(many)).toHaveLength(MAX_VALIDATION_ERRORS);
+    expect(errorsOf(validateBackup(withEvent({ ['k'.repeat(500)]: 1 }))).join().length).toBeLessThan(200);
+  });
+  it('rejects duplicate event ids inside one file', () => {
+    const e = event();
+    expect(validateBackup(withEvents([e, e]))).toMatchObject({ ok: false, errors: [expect.stringContaining('duplicate')] });
   });
   it('rejects text that is not JSON with a readable message', () =>
     expect(parseAndValidateBackup('<html>')).toMatchObject({ ok: false, errors: [expect.stringContaining('JSON')] }));

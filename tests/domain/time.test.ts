@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { addDays, deviceTimeZone, isTimeZone, localDateOf, localTimeOf, zonedToInstant } from '../../src/domain/time';
 
 describe('time-zone helpers (the brief)', () => {
@@ -52,6 +52,23 @@ describe('time-zone helpers (more)', () => {
     expect(isTimeZone('Australia/Lord_Howe')).toBe(true);
     expect(isTimeZone('')).toBe(false);
     expect(isTimeZone(5 as never)).toBe(false);
+  });
+
+  it('isTimeZone answers the same on repeated calls (cached per zone), for good and bad names', () => {
+    for (let i = 0; i < 3; i++) {
+      expect(isTimeZone('Asia/Shanghai')).toBe(true);
+      expect(isTimeZone('Mars/Base')).toBe(false);
+    }
+  });
+
+  it('isTimeZone builds one formatter per zone, not one per call', () => {
+    const spy = vi.spyOn(Intl, 'DateTimeFormat');
+    try {
+      for (let i = 0; i < 5; i++) isTimeZone('America/Argentina/Ushuaia');
+      expect(spy.mock.calls.length).toBeLessThanOrEqual(1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('deviceTimeZone is a real zone', () => expect(isTimeZone(deviceTimeZone())).toBe(true));

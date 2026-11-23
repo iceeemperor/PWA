@@ -8,7 +8,7 @@ export class InvalidRecordError extends Error {
   }
 }
 
-// One set of field rules (F4). The same rules live in backup/validate.ts (which uses these helpers), in push_change
+// One set of field rules (F4). The same rules live in backup/validate.ts (todo rows use these helpers; event rows go to validateEventFields), in push_change
 // and in the table CHECKs (supabase/migrations/20261106000600_harden.sql); tests/db/field-rules.test.ts keeps them equal.
 
 export const KINDS: readonly string[] = ['todo', 'goal'];

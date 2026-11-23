@@ -162,9 +162,9 @@ describe('field rules agree: Repo validator, backup validator, push_change (F4)'
   });
 });
 
-// Events (stage 2): whole records, one rule broken (or kept) per case against a valid all-day event. The Repo and the
-// backup validator share validateEventFields, so the client column is that function; the backup column is added with
-// the backup validator itself (stage 2 Task 4).
+// Events (stage 2): whole records, one rule broken (or kept) per case against a valid all-day event. Three columns: the
+// Repo's validator (validateEventFields), the backup validator (which runs the same function on every row of a file)
+// and push_change. The first two must agree on every row, including the client-only refusals.
 type EventCase = [name: string, over: Row, ok: boolean];
 const TIMED: Row = { all_day: false, starts_at: '2026-11-23T09:00', tz: 'Asia/Shanghai' };
 const EVENT_CASES: EventCase[] = [
@@ -216,6 +216,8 @@ const EVENT_CASES: EventCase[] = [
   ['a tz starting with a slash', { ...TIMED, tz: '/Asia' }, false],
   ['an empty tz', { ...TIMED, tz: '' }, false],
   ['an offset as the tz', { ...TIMED, tz: '+08:00' }, false],
+  ['an Arabic-Indic digit in an all-day date', { starts_at: '202\u0662-11-23' }, false],
+  ['an Arabic-Indic digit in a timed start', { ...TIMED, starts_at: '2026-11-23T0\u0669:00' }, false],
   ['a non-string tz', { ...TIMED, tz: 5 }, false],
   ['rrule set', { rrule: 'FREQ=DAILY' }, false],
 ];
@@ -230,12 +232,32 @@ const CLIENT_ONLY_REFUSALS: [name: string, over: Row][] = [
   ['an impossible month in a timed end', { ...TIMED, ends_at: '2026-13-01T09:00' }],
   // Shaped like a zone name, but no such zone: the server checks only the name's form.
   ['a zone that does not exist', { ...TIMED, tz: 'Mars/Base' }],
+  // Z has the shape of a zone name (one letter), but Intl has no such zone.
+  ['the tz Z', { ...TIMED, tz: 'Z' }],
 ];
+
+const backupEventRow = (over: Row): Row => ({
+  id: randomUUID(),
+  created_at: '2026-11-05T10:00:00.000Z',
+  updated_at: '2026-11-05T10:00:00.000Z',
+  deleted_at: null,
+  ...goodEvent(over),
+});
+const backupWithEvent = (row: Row) => ({
+  format: 'productivity-app-export',
+  version: 1,
+  exported_at: '2026-11-05T12:00:00.000Z',
+  tables: { events: [row] },
+});
 
 const goodEvent = (over: Row): Row => ({
   title: '会', all_day: true, starts_at: '2026-11-23', ends_at: null, tz: null, note: '', important: false, done: false, rrule: null,
   ...over,
 });
+
+function eventBackupAccepts(over: Row): boolean {
+  return validateBackup(backupWithEvent(backupEventRow(over))).ok;
+}
 
 function eventClientAccepts(over: Row): boolean {
   try {
@@ -273,15 +295,17 @@ async function eventUpdateAccepts(over: Row): Promise<boolean> {
   }
 }
 
-describe('event field rules agree: validateEventFields and push_change (stage 2)', () => {
+describe('event field rules agree: validateEventFields, backup validator and push_change (stage 2)', () => {
   it.each(EVENT_CASES.map((c) => [`${c[0]} → ${c[2] ? 'ok' : 'refused'}`, c] as const))('%s', async (_n, [, over, ok]) => {
     expect(eventClientAccepts(over), 'validateEventFields').toBe(ok);
+    expect(eventBackupAccepts(over), 'validateBackup').toBe(ok);
     expect(await eventPushAccepts(over), 'push_change insert').toBe(ok);
     expect(await eventUpdateAccepts(over), 'push_change update').toBe(ok);
   });
 
   it.each(CLIENT_ONLY_REFUSALS)('expected exception: %s is refused by the client, accepted by the server', async (_n, over) => {
     expect(eventClientAccepts(over), 'validateEventFields').toBe(false);
+    expect(eventBackupAccepts(over), 'validateBackup').toBe(false);
     expect(await eventPushAccepts(over), 'push_change insert').toBe(true);
     expect(await eventUpdateAccepts(over), 'push_change update').toBe(true);
   });
