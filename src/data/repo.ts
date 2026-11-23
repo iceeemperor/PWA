@@ -1,6 +1,7 @@
 import type { IDBPTransaction } from 'idb';
 import { newId as defaultNewId } from '../domain/ids';
 import { isNetworkLikeMessage } from '../domain/network-errors';
+import { contentKeys, defaultsOf } from '../domain/tables';
 import type {
   CommonFields,
   FieldsOf,
@@ -92,9 +93,8 @@ export interface Repo {
 
 const QUEUE = 'queue';
 
-// Per-table rules. Content fields are the ones the client may write; everything
-// else on a record (`CommonFields`) is set by the repo or by the server. A later
-// table adds its own entry here.
+// Per-table rules. Content fields (the keys of TABLE_DEFAULTS) are the ones the client may write; everything
+// else on a record (`CommonFields`) is set by the repo or by the server. A later table adds its own entry here.
 interface TableSpec {
   defaults(): Record<string, unknown>;
   validate(fields: Record<string, unknown>): void;
@@ -102,8 +102,15 @@ interface TableSpec {
 
 const SPECS: Record<TableName, TableSpec> = {
   todos: {
-    defaults: () => ({ kind: 'todo', title: '', done: false, priority: 'normal', due_date: null, note: '', steps: [] }),
+    defaults: () => defaultsOf('todos') as unknown as Record<string, unknown>,
     validate: (f) => validateTodoFields(f as Partial<TodoFields>),
+  },
+  // Placeholder until the event field rules arrive (stage 2 Task 3): no event can be written yet.
+  events: {
+    defaults: () => defaultsOf('events') as unknown as Record<string, unknown>,
+    validate: () => {
+      throw new InvalidRecordError('events are not available yet');
+    },
   },
 };
 
@@ -111,7 +118,7 @@ const SPECS: Record<TableName, TableSpec> = {
 function contentOf(t: TableName, input: object): Record<string, unknown> {
   const given = input as Record<string, unknown>;
   const out: Record<string, unknown> = {};
-  for (const key of Object.keys(SPECS[t].defaults())) {
+  for (const key of contentKeys(t)) {
     if (given[key] !== undefined) out[key] = given[key];
   }
   return out;

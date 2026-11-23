@@ -8,7 +8,7 @@ describe('local db', () => {
 
   it('creates a store per table plus queue and meta, a db_id and cursor 0', async () => {
     const db = await openLocalDb('t1');
-    expect([...db.raw.objectStoreNames].sort()).toEqual(['meta', 'queue', 'todos']);
+    expect([...db.raw.objectStoreNames].sort()).toEqual(['events', 'meta', 'queue', 'todos']);
     expect(isUuid(db.dbId)).toBe(true);
     expect(await db.getMeta('cursor')).toBe(0);
     db.close();

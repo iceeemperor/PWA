@@ -1,8 +1,8 @@
-// Shared domain types. Stage 1 has a single synced table (`todos`); the
-// table-keyed helper types below are the extension point for later stages.
+// Shared domain types. The synced tables are `todos` and (from stage 2) `events`;
+// the table-keyed helper types below are the extension point for later stages.
 
-export type TableName = 'todos';
-export const TABLES: readonly TableName[] = ['todos'];
+export type TableName = 'todos' | 'events';
+export const TABLES: readonly TableName[] = ['todos', 'events'];
 
 export interface CommonFields {
   id: string;
@@ -32,12 +32,32 @@ export interface TodoFields {
 
 export type TodoRecord = CommonFields & TodoFields;
 
+/**
+ * A calendar event. All-day: `starts_at`/`ends_at` are `YYYY-MM-DD` and `tz` is null. Timed: local time
+ * `YYYY-MM-DDTHH:mm` (no offset) in the IANA zone `tz`. `ends_at` may be null. `rrule` stays null in stage 2.
+ */
+export interface EventFields {
+  title: string;
+  all_day: boolean;
+  starts_at: string;
+  ends_at: string | null;
+  tz: string | null;
+  note: string;
+  important: boolean;
+  done: boolean;
+  rrule: string | null;
+}
+
+export type EventRecord = CommonFields & EventFields;
+
 interface FieldsByTable {
   todos: TodoFields;
+  events: EventFields;
 }
 
 interface NewFieldsByTable {
   todos: Pick<TodoFields, 'title'> & Partial<Omit<TodoFields, 'title'>>;
+  events: Pick<EventFields, 'title' | 'starts_at'> & Partial<Omit<EventFields, 'title' | 'starts_at'>>;
 }
 
 export type FieldsOf<T extends TableName> = FieldsByTable[T];

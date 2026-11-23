@@ -24,6 +24,7 @@ vi.mock('../../src/sync/engine', async (orig) => {
 
 import { createServices } from '../../src/app/services';
 import { AuthRetryableFetchError } from '@supabase/supabase-js';
+import { deleteDB, openDB } from 'idb';
 import { LocalDbUnavailableError, openLocalDb } from '../../src/data/local-db';
 import { OWNER_SIGNED_IN, OWNER_USER_ID } from '../../src/data/owner';
 
@@ -138,5 +139,34 @@ describe('createServices', () => {
     expect(await s.repo.pendingCount()).toBe(2);
     await s.db.raw.clear('queue');
     s.db.close();
+  });
+
+  // Last in the file: it deletes the default database, so the tests above keep their order-independent setup.
+  it('passes onVersionChange and onBlocked to the local database', async () => {
+    const onVersionChange = vi.fn();
+    const onBlocked = vi.fn();
+    const s = await createServices(env(), { onVersionChange, onBlocked });
+    const newer = await openDB('productivity-app', 3);
+    expect(onVersionChange).toHaveBeenCalledTimes(1);
+    expect(() => s.db.raw.transaction('meta')).toThrow();
+    newer.close();
+    await deleteDB('productivity-app');
+
+    // A stage 1 tab that never closes its connection holds up version 2: createServices reports it as blocked.
+
+    const stuck = await openDB('productivity-app', 1, {
+      upgrade(d) {
+        d.createObjectStore('todos', { keyPath: 'id' });
+        d.createObjectStore('queue', { keyPath: 'seq', autoIncrement: true });
+        d.createObjectStore('meta');
+      },
+    });
+    const booting = createServices(env(), { onBlocked });
+    await vi.waitFor(() => expect(onBlocked).toHaveBeenCalledTimes(1));
+    stuck.close();
+    const t = await booting;
+    expect(t.db.raw.version).toBe(2);
+    t.db.close();
+    await deleteDB('productivity-app');
   });
 });

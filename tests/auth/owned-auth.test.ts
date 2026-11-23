@@ -87,10 +87,11 @@ describe('account switch on one browser (F3)', () => {
     expect(await db.getMeta(OWNER_USER_ID)).toBe(A);
   });
 
-  it('another user with an empty queue: local records, cursor and export date are wiped, db_id kept, new owner set', async () => {
+  it('another user with an empty queue: local records (todos and events), cursor and export date are wiped, db_id kept, new owner set', async () => {
     const { db, inner, auth } = await asOwnerA();
     // A's synced record and cursor (nothing queued).
     await db.raw.put('todos', { id: 'r1', user_id: A, title: 'A private', rev: 5, deleted_at: null, purged_at: null });
+    await db.raw.put('events', { id: 'e1', user_id: A, title: 'A meeting', rev: 6, deleted_at: null, purged_at: null });
     await db.setMeta('cursor', 5);
     await db.setMeta('last_export_at', '2026-11-01T00:00:00.000Z');
     const dbId = await db.getMeta('db_id');
@@ -99,6 +100,7 @@ describe('account switch on one browser (F3)', () => {
     expect(await auth.signIn('b@b.c', 'pw')).toEqual({ ok: true });
     expect(auth.getUserId()).toBe(B);
     expect(await db.raw.getAll('todos')).toEqual([]);
+    expect(await db.raw.getAll('events')).toEqual([]);
     expect(await db.raw.getAll('queue')).toEqual([]);
     expect(await db.getMeta('cursor')).toBe(0);
     expect(await db.getMeta('last_export_at')).toBeUndefined();

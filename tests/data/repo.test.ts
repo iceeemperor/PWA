@@ -10,6 +10,7 @@ import {
   type Repo,
 } from '../../src/data/repo';
 import { validateTodoFields } from '../../src/data/validate-fields';
+import { TABLE_DEFAULTS } from '../../src/domain/tables';
 import type { QueuedOp, TodoRecord } from '../../src/domain/types';
 
 const U = '11111111-1111-4111-8111-111111111111';
@@ -320,6 +321,24 @@ describe('repo', () => {
     await expect(repo.create('todos', {} as never)).rejects.toBeInstanceOf(InvalidRecordError);
     expect(await repo.list('todos')).toHaveLength(0);
     expect(await ops()).toHaveLength(0);
+  });
+
+  it('refuses every events write until events are available, and leaves nothing behind', async () => {
+    const e = await repo.create('events', { title: '会', starts_at: '2026-11-23' }).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(InvalidRecordError);
+    expect((e as Error).message).toBe('events are not available yet');
+    await db.raw.put('events', { ...TABLE_DEFAULTS.events, id: 'e1', user_id: U, title: 'x', starts_at: '2026-11-23', created_at: 'c', updated_at: 'u', rev: 1, deleted_at: null, purged_at: null });
+    await expect(repo.update('events', 'e1', { title: 'y' })).rejects.toBeInstanceOf(InvalidRecordError);
+    expect(await db.raw.get('events', 'e1')).toMatchObject({ title: 'x' });
+    expect(await ops()).toHaveLength(0);
+  });
+
+  it('create takes its defaults from TABLE_DEFAULTS without sharing them', async () => {
+    const r = await repo.create('todos', { title: 'a' });
+    expect(r).toMatchObject({ ...TABLE_DEFAULTS.todos, title: 'a' });
+    expect(r.steps).not.toBe(TABLE_DEFAULTS.todos.steps);
+    r.steps.push({ id: 's', text: 't', done: false });
+    expect(TABLE_DEFAULTS.todos.steps).toEqual([]);
   });
 
   it('search has the agreed shape and returns nothing yet', async () => expect(await repo.search('x')).toEqual([]));

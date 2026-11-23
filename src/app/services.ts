@@ -1,6 +1,6 @@
 import { createSupabaseAuth, type AuthApi } from '../auth/auth';
 import { createOwnedAuth } from '../auth/owned-auth';
-import { openLocalDb, type LocalDb } from '../data/local-db';
+import { openLocalDb, type LocalDb, type LocalDbOptions } from '../data/local-db';
 import { createOwnerStore } from '../data/owner';
 import { createRepo, type Repo } from '../data/repo';
 import { getSupabase } from '../supabase';
@@ -40,9 +40,12 @@ export async function requeueNetworkFailures(repo: Pick<Repo, 'retryFailed'>): P
   }
 }
 
-/** Builds the app's services. `openLocalDb`'s LocalDbUnavailableError propagates unchanged. */
-export async function createServices(env: ImportMetaEnv): Promise<Services> {
-  const db = await openLocalDb();
+/**
+ * Builds the app's services. `openLocalDb`'s LocalDbUnavailableError propagates unchanged; `o.onVersionChange` and
+ * `o.onBlocked` are passed to it (another tab upgraded the database / an old tab holds up this upgrade).
+ */
+export async function createServices(env: ImportMetaEnv, o: LocalDbOptions = {}): Promise<Services> {
+  const db = await openLocalDb(undefined, o);
   const supabase = getSupabase();
   const owner = createOwnerStore(db);
   // Offline with an expired token, the remembered owner keeps the app usable; boot never waits on the refresh.

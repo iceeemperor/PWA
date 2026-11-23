@@ -13,7 +13,7 @@ type Scope = 'all' | 'journal';
 type Busy = null | 'json' | 'markdown' | 'import';
 type ImportView = { kind: 'summary'; summary: ImportSummary } | { kind: 'invalid'; errors: string[] } | { kind: 'error'; message: string };
 
-const TABLE_TEXT: Record<TableName, string> = { todos: '待办' };
+const TABLE_TEXT: Record<TableName, string> = { todos: '待办', events: '日历事项' };
 const KIND_TEXT: Record<OpKind, string> = { insert: '新增', update: '修改', delete: '删除', restore: '还原' };
 const SKIP_TEXT: Record<string, string> = { exists: '已存在', purged: '已被永久清除' };
 const CLOUD_ERROR_TEXT: Record<CloudErrorKind, string> = {

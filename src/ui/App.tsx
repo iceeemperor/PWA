@@ -8,26 +8,44 @@ import { Shell } from './Shell';
 import { UnavailableScreen } from './UnavailableScreen';
 import { UpdatePrompt } from './UpdatePrompt';
 
+/** What the local database tells the page while it starts and runs (see LocalDbOptions). */
+export type DbSignals = { onVersionChange: () => void; onBlocked: () => void };
+
 // One boot per page load, so StrictMode's double effects do not open a second database or auth listener.
 let boot: Promise<Services> | null = null;
-function bootServices(): Promise<Services> {
-  boot ??= createServices(import.meta.env);
+function bootServices(signals: DbSignals): Promise<Services> {
+  boot ??= createServices(import.meta.env, signals);
   return boot;
 }
 
-type RootState = { kind: 'loading' } | { kind: 'ready'; services: Services } | { kind: 'error'; error: unknown };
+type RootState =
+  | { kind: 'loading'; blocked: boolean }
+  | { kind: 'ready'; services: Services }
+  | { kind: 'error'; error: unknown }
+  // Another tab upgraded the local database; this page's connection is closed and it must reload.
+  | { kind: 'version_changed' };
 
-/** Builds the services, then shows the app; a failed start shows why. `create` replaces the real boot in tests. */
-export function Root({ create }: { create?: () => Promise<Services> } = {}) {
-  const [state, setState] = useState<RootState>({ kind: 'loading' });
+/**
+ * Builds the services, then shows the app; a failed start shows why. `create` replaces the real boot in tests and
+ * `reload` the page reload.
+ */
+export function Root({ create, reload }: { create?: (signals: DbSignals) => Promise<Services>; reload?: () => void } = {}) {
+  const [state, setState] = useState<RootState>({ kind: 'loading', blocked: false });
   // Boot once per mount: a new `create` function on a re-render must not start another boot.
   const createRef = useRef(create);
 
   useEffect(() => {
     let live = true;
-    (createRef.current ?? bootServices)().then(
-      (services) => live && setState({ kind: 'ready', services }),
-      (error: unknown) => live && setState({ kind: 'error', error }),
+    // Not gated on `live`: under StrictMode the remount reuses the first boot, whose signals must still land.
+    const signals: DbSignals = {
+      onBlocked: () => setState((s) => (s.kind === 'loading' ? { kind: 'loading', blocked: true } : s)),
+      onVersionChange: () => setState({ kind: 'version_changed' }),
+    };
+    // Once the connection is gone, a boot that finishes later must not bring the app back on top of it.
+    const unlessClosed = (next: RootState) => (s: RootState) => (s.kind === 'version_changed' ? s : next);
+    (createRef.current ?? bootServices)(signals).then(
+      (services) => live && setState(unlessClosed({ kind: 'ready', services })),
+      (error: unknown) => live && setState(unlessClosed({ kind: 'error', error })),
     );
     return () => {
       live = false;
@@ -38,13 +56,30 @@ export function Root({ create }: { create?: () => Promise<Services> } = {}) {
   return (
     <>
       <UpdatePrompt />
-      <RootBody state={state} />
+      <RootBody state={state} reload={reload ?? (() => location.reload())} />
     </>
   );
 }
 
-function RootBody({ state }: { state: RootState }) {
-  if (state.kind === 'loading') return <div className="boot">正在启动…</div>;
+function RootBody({ state, reload }: { state: RootState; reload: () => void }) {
+  if (state.kind === 'loading') {
+    return (
+      <div className="boot">
+        正在启动…
+        {state.blocked && <p role="status">请关闭其他打开着本应用的标签页或窗口</p>}
+      </div>
+    );
+  }
+  if (state.kind === 'version_changed') {
+    return (
+      <main className="screen-message" role="alert">
+        <p>应用已在另一个标签页更新，请刷新</p>
+        <button type="button" onClick={reload}>
+          刷新
+        </button>
+      </main>
+    );
+  }
   if (state.kind === 'error') {
     if (state.error instanceof LocalDbUnavailableError) return <UnavailableScreen />;
     const message = state.error instanceof Error ? state.error.message : String(state.error);
@@ -52,7 +87,7 @@ function RootBody({ state }: { state: RootState }) {
       <main className="screen-message" role="alert">
         <h1>启动失败</h1>
         <p>{message}</p>
-        <button type="button" onClick={() => location.reload()}>
+        <button type="button" onClick={reload}>
           重新加载
         </button>
       </main>

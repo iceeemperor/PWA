@@ -1,5 +1,6 @@
 import type { IDBPTransaction } from 'idb';
 import type { LocalDb } from '../data/local-db';
+import { defaultsOf } from '../domain/tables';
 import { TABLES, type PullPage, type PushOp, type PushResult, type QueuedOp, type TableName } from '../domain/types';
 import { CloudError, type CloudClient, type CloudErrorKind } from './cloud';
 
@@ -57,11 +58,6 @@ const LOCK_NAME = 'pa-sync';
 
 type Stored = Record<string, unknown> & { id: string; rev: number; deleted_at: string | null; purged_at: string | null };
 type WriteTx = IDBPTransaction<unknown, string[], 'readwrite'>;
-
-// What a purge leaves in each table's content columns: the SQL column defaults (core.sql).
-const TOMBSTONE_CONTENT: Record<TableName, Record<string, unknown>> = {
-  todos: { kind: 'todo', title: '', done: false, priority: 'normal', due_date: null, note: '', steps: [] },
-};
 
 // Cloud failures that end the run with the queue untouched.
 const STOPS: Record<Exclude<CloudErrorKind, 'rejected'>, SyncReport['outcome']> = {
@@ -221,7 +217,8 @@ export function createSyncEngine(deps: SyncDeps): SyncEngine {
       const at = new Date().toISOString();
       await store.put({
         ...base,
-        ...TOMBSTONE_CONTENT[op.table],
+        // What a purge leaves in the content columns: the SQL column defaults.
+        ...defaultsOf(op.table),
         rev: Math.max(base.rev, local?.rev ?? 0),
         purged_at: server?.purged_at ?? at,
         deleted_at: server?.deleted_at ?? local?.deleted_at ?? at,
