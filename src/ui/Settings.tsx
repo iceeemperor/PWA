@@ -7,6 +7,7 @@ import { recordExport } from '../backup/reminder';
 import { saveFile } from '../backup/save-file';
 import type { ImportSummary, OpKind, QueuedOp, TableName } from '../domain/types';
 import { CloudError, type CloudErrorKind } from '../sync/cloud';
+import type { SyncReport } from '../sync/engine';
 import { notifyExportRecorded } from './ExportReminder';
 import { TrashSection } from './TrashSection';
 
@@ -32,6 +33,26 @@ function today(): string {
 function importErrorText(e: unknown): string {
   if (e instanceof CloudError) return `导入失败：${CLOUD_ERROR_TEXT[e.kind]}`;
   return '导入失败：发生未知错误，请稍后再试';
+}
+
+/** The one result line under 立即同步, from the report. */
+export function syncResultText(r: SyncReport): string {
+  let text: string;
+  switch (r.outcome) {
+    case 'ok':
+      text = r.pushed + r.pulled === 0 ? '已同步' : `已同步：上传 ${r.pushed} 项，下载 ${r.pulled} 项`;
+      break;
+    case 'offline':
+      text = '离线，联网后会自动补传';
+      break;
+    case 'unavailable':
+      text = '云端暂时无法连接，稍后再试';
+      break;
+    case 'auth_expired':
+      text = '登录已过期，请重新登录';
+      break;
+  }
+  return r.failed > 0 ? `${text}，有 ${r.failed} 项同步失败（见下方列表）` : text;
 }
 
 /** Runs a sync and ignores how it went: exporting and importing must not depend on the cloud being reachable. */
@@ -74,6 +95,9 @@ export function Settings({ services }: SettingsProps) {
   const [failed, setFailed] = useState<QueuedOp[]>([]);
   const [failedLoaded, setFailedLoaded] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
+  const syncGuard = useRef(false);
   // Same live-flag pattern as the failed-list loader: work that finishes after the page closed sets no state.
   const live = useRef(true);
   useEffect(() => {
@@ -126,6 +150,26 @@ export function Settings({ services }: SettingsProps) {
         const ops = await repo.failedOps().catch(() => null);
         if (live.current && ops) setFailed(ops);
       }
+    }
+  }
+
+  /** Manual sync. Lists and the banner refresh through engine.subscribe, so only the result line is set here. */
+  async function syncNow() {
+    if (syncGuard.current) return;
+    syncGuard.current = true;
+    setSyncing(true);
+    setSyncMsg(null);
+    let text: string;
+    try {
+      text = syncResultText(await engine.sync());
+    } catch {
+      text = '同步失败，请稍后再试';
+    } finally {
+      syncGuard.current = false;
+    }
+    if (live.current) {
+      setSyncMsg(text);
+      setSyncing(false);
     }
   }
 
@@ -197,6 +241,18 @@ export function Settings({ services }: SettingsProps) {
   return (
     <section className="page settings">
       <h2>设置</h2>
+
+      <div className="card">
+        <h3>同步</h3>
+        <button type="button" className="sync-now" disabled={syncing} onClick={() => void syncNow()}>
+          {syncing ? '正在同步…' : '立即同步'}
+        </button>
+        {syncMsg && (
+          <p className="muted" role="status">
+            {syncMsg}
+          </p>
+        )}
+      </div>
 
       <div className="card">
         <h3>导出</h3>

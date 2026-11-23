@@ -1039,3 +1039,8 @@ button.restore {
   min-height: 44px;
   min-width: 44px;
 }
+
+/* Settings: the manual sync button keeps the 44px touch target. */
+.settings button.sync-now {
+  min-height: 44px;
+}

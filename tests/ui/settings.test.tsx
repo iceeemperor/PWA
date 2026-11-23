@@ -344,3 +344,74 @@ describe('Settings: edges', () => {
     expect(reads.mock.calls.length).toBe(before);
   });
 });
+
+describe('Settings: sync now', () => {
+  async function ready() {
+    renderSettings();
+    // Settings syncs once on mount; let that finish so the click's call is the only one counted.
+    await settle(() => engine.sync.mock.calls.length > 0);
+    const btn = await screen.findByRole('button', { name: '立即同步' });
+    engine.sync.mockClear();
+    return btn;
+  }
+  const rep = (p: Partial<SyncReport>): SyncReport => ({ ...OK, ...p });
+  const cases: [string, Partial<SyncReport>, string][] = [
+    ['ok, nothing moved', {}, '已同步'],
+    ['ok, counts', { pushed: 2, pulled: 3 }, '已同步：上传 2 项，下载 3 项'],
+    ['ok, only pulled', { pulled: 1 }, '已同步：上传 0 项，下载 1 项'],
+    ['offline', { outcome: 'offline' }, '离线，联网后会自动补传'],
+    ['unavailable', { outcome: 'unavailable' }, '云端暂时无法连接，稍后再试'],
+    ['auth_expired', { outcome: 'auth_expired' }, '登录已过期，请重新登录'],
+    ['ok with failed', { pushed: 1, failed: 2 }, '已同步：上传 1 项，下载 0 项，有 2 项同步失败（见下方列表）'],
+    ['ok, zero counts with failed', { failed: 1 }, '已同步，有 1 项同步失败（见下方列表）'],
+    ['offline with failed', { outcome: 'offline', failed: 3 }, '离线，联网后会自动补传，有 3 项同步失败（见下方列表）'],
+  ];
+  it.each(cases)('shows the result line: %s', async (_n, partial, text) => {
+    const btn = await ready();
+    engine.sync.mockResolvedValueOnce(rep(partial));
+    await userEvent.click(btn);
+    expect((await screen.findByText(text)).textContent).toBe(text);
+  });
+
+  it('shows a fallback line when sync rejects', async () => {
+    const btn = await ready();
+    engine.sync.mockRejectedValueOnce(new Error('boom'));
+    await userEvent.click(btn);
+    expect(await screen.findByText('同步失败，请稍后再试')).toBeTruthy();
+    expect((screen.getByRole('button', { name: '立即同步' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('disables the button while running and ignores a second click', async () => {
+    const btn = await ready();
+    let release!: (r: SyncReport) => void;
+    engine.sync.mockReturnValueOnce(new Promise<SyncReport>((r) => (release = r)));
+    await userEvent.click(btn);
+    const running = (await screen.findByRole('button', { name: '正在同步…' })) as HTMLButtonElement;
+    expect(running.disabled).toBe(true);
+    fireEvent.click(running);
+    fireEvent.click(running);
+    expect(engine.sync).toHaveBeenCalledTimes(1);
+    release(rep({ pulled: 1 }));
+    expect(await screen.findByText('已同步：上传 0 项，下载 1 项')).toBeTruthy();
+    expect((screen.getByRole('button', { name: '立即同步' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('clears the previous result when a new run starts', async () => {
+    const btn = await ready();
+    await userEvent.click(btn);
+    await screen.findByText('已同步');
+    let release!: (r: SyncReport) => void;
+    engine.sync.mockReturnValueOnce(new Promise<SyncReport>((r) => (release = r)));
+    await userEvent.click(screen.getByRole('button', { name: '立即同步' }));
+    expect(screen.queryByText('已同步')).toBeNull();
+    release(OK);
+    await screen.findByText('已同步');
+  });
+
+  it('places the 同步 section before 导出完整备份', async () => {
+    await ready();
+    const h = screen.getByRole('heading', { name: '同步' });
+    const exp = screen.getByRole('button', { name: '导出完整备份' });
+    expect(h.compareDocumentPosition(exp) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
