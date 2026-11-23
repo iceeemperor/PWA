@@ -55,6 +55,7 @@ describe('events converge across devices and offline', () => {
     const todos = (await b.repo.list('todos')) as TodoRecord[];
     const events = (await b.repo.list('events')) as EventRecord[];
     const agenda = buildAgenda(todos, events, { now: new Date('2026-11-23T04:00:00Z'), tz: 'Asia/Shanghai', mode: 'date', showDone: false });
+    expect(await b.repo.get('events', e.id)).toMatchObject({ important: true });
     expect(agenda.groups.flatMap((g) => g.items).map((i) => i.id)).toContain(e.id);
   });
 
@@ -122,12 +123,13 @@ describe('events converge across devices and offline', () => {
     const e = await a.repo.create('events', DAY);
     await a.repo.update('events', e.id, { title: 'Dentist v2' });
     await a.repo.update('events', e.id, { done: true });
+    await a.repo.update('events', e.id, { title: 'Dentist v3' });
     await a.engine.sync();
     await b.engine.sync();
     expect(await b.repo.get('events', e.id)).toBeUndefined();
     flakyA.failNext('network', 0);
     await a.engine.sync(); await b.engine.sync();
-    expect(await b.repo.get('events', e.id)).toMatchObject({ title: 'Dentist v2', done: true });
+    expect(await b.repo.get('events', e.id)).toMatchObject({ title: 'Dentist v3', done: true });
     expect(await eventsOf(a)).toEqual(await eventsOf(b));
   });
 });
