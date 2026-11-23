@@ -794,3 +794,153 @@ textarea:focus-visible {
     padding: 24px;
   }
 }
+
+/* Calendar */
+.month-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.month-bar .month-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 17px;
+  text-align: center;
+}
+
+.month-nav {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 8px;
+}
+
+.month-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 2px;
+}
+
+.month-row {
+  display: contents;
+}
+
+.weekday {
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+  padding: 4px 0;
+}
+
+.day-slot {
+  min-width: 0;
+}
+
+.day-cell {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 2px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 2px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text);
+}
+
+.day-cell.outside {
+  color: var(--muted);
+  background: transparent;
+}
+
+.day-cell.today .day-num {
+  color: var(--brand);
+  font-weight: 700;
+}
+
+.day-cell.selected {
+  background: var(--brand-soft);
+  border-color: var(--brand);
+}
+
+.dots {
+  display: flex;
+  gap: 3px;
+  min-height: 6px;
+}
+
+.event-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.event-dot.important {
+  background: #2f5bea;
+}
+
+.event-dot.done-important {
+  opacity: 0.45;
+}
+
+.day-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 16px 0 8px;
+}
+
+.day-header h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.day-header button {
+  min-height: 44px;
+}
+
+.day-events {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.day-event-btn {
+  width: 100%;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+}
+
+.event-time {
+  flex: none;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.event-tz {
+  margin-left: 4px;
+  font-size: 12px;
+}
+
+.event-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.event-title.done-important {
+  text-decoration: line-through;
+}

@@ -47,6 +47,11 @@ export function eventDate(e: EventRecord, tz: string): string {
   return eventWhen(e, isTimeZone(tz) ? tz : 'UTC').date;
 }
 
+/** The wall-clock time of an event in the device zone `tz` (`HH:mm`); null for all-day events. Never throws. */
+export function eventTime(e: EventRecord, tz: string): string | null {
+  return eventWhen(e, isTimeZone(tz) ? tz : 'UTC').time;
+}
+
 const live = (r: { deleted_at: string | null; purged_at: string | null }): boolean => r.deleted_at === null && r.purged_at === null;
 
 const cmp = <T extends string | number>(a: T, b: T): number => (a < b ? -1 : a > b ? 1 : 0);
