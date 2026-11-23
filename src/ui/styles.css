@@ -38,7 +38,9 @@ body {
 }
 
 button,
-input {
+input,
+select,
+textarea {
   font: inherit;
   color: inherit;
 }
@@ -248,60 +250,376 @@ button:focus-visible {
   margin-top: 0;
 }
 
-/* Temporary todo screen */
-.temp-label {
-  display: inline-block;
-  font-size: 12px;
-  color: var(--warn-text);
-  background: var(--warn-bg);
-  border-radius: 4px;
-  padding: 2px 8px;
-  margin: 0 0 12px;
+/* To-do page: 近期 and 目标 */
+select,
+textarea,
+input[type='date'] {
+  font: inherit;
+  color: inherit;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  padding: 8px 10px;
+  min-height: 44px;
+  /* 16px keeps iOS Safari from zooming into the field. */
+  font-size: 16px;
+  max-width: 100%;
 }
 
-.todo-add {
+textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 72px;
+}
+
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 1px;
+}
+
+.todos-page input[type='checkbox'] {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin: 11px 0;
+  accent-color: var(--brand);
+}
+
+.tabs {
   display: flex;
-  gap: 8px;
+  gap: 4px;
+  background: var(--card);
+  border-radius: 10px;
+  padding: 4px;
+  margin-bottom: 16px;
 }
 
-.todo-list {
+.tab {
+  flex: 1;
+  border: none;
+  background: none;
+  color: var(--muted);
+  min-height: 44px;
+}
+
+.tab[aria-selected='true'] {
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-weight: 600;
+}
+
+.quick-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.quick-add .quick-title {
+  flex: 1 1 100%;
+  min-height: 44px;
+}
+
+.goal-add .quick-title {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.quick-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.inline-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--muted);
+  min-width: 0;
+}
+
+.inline-field input[type='date'] {
+  width: 150px;
+}
+
+.quick-options .primary {
+  margin-left: auto;
+}
+
+.todos-page button {
+  min-height: 44px;
+}
+
+.agenda-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+}
+
+.agenda-toolbar .check input[type='checkbox'] {
+  margin: 0;
+}
+
+.empty {
+  margin: 16px 0;
+}
+
+.agenda-group {
+  margin-bottom: 16px;
+}
+
+.group-title {
+  font-size: 14px;
+  color: var(--muted);
+  margin: 0 0 6px;
+}
+
+.group-title.high {
+  color: var(--danger);
+}
+
+.group-title.normal {
+  color: var(--brand);
+}
+
+.agenda-list {
   list-style: none;
-  margin: 16px 0 0;
+  margin: 0;
   padding: 0;
   background: var(--card);
   border-radius: 10px;
 }
 
-.todo-list li {
+.agenda-item {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 4px 12px;
   border-bottom: 1px solid var(--line);
 }
 
-.todo-list li:last-child {
+.agenda-item:last-child {
   border-bottom: none;
 }
 
-.todo-list label {
+.agenda-item.editing {
+  display: block;
+  padding: 12px;
+}
+
+.agenda-main {
   flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 40px;
-  word-break: break-word;
+  min-width: 0;
+  padding: 6px 0;
 }
 
-.todo-list input[type='checkbox'] {
-  width: 20px;
-  height: 20px;
-  accent-color: var(--brand);
+.todos-page .agenda-title {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 4px 0;
+  min-height: 32px;
+  overflow-wrap: anywhere;
 }
 
-.todo-list li.done span {
+.agenda-item.done .agenda-title {
   color: var(--muted);
   text-decoration: line-through;
+}
+
+.item-note {
+  margin: 2px 0 4px;
+  font-size: 14px;
+  color: var(--muted);
+  /* Plain text in stage 2: keep the user's line breaks, cut long notes to two lines. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.agenda-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.prio-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.prio-dot.high {
+  background: var(--danger);
+}
+
+.prio-dot.normal {
+  background: var(--brand);
+}
+
+.prio-dot.low {
+  background: #b0b6c3;
+}
+
+.agenda-item.overdue .agenda-date,
+.overdue-mark {
+  color: var(--danger);
+}
+
+.overdue-mark {
+  font-weight: 600;
+  border: 1px solid var(--danger);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+.todos-page .cal-mark {
+  min-height: 32px;
+  padding: 2px 10px;
+  font-size: 13px;
+  color: var(--brand);
+  background: var(--brand-soft);
+  border-color: var(--brand-soft);
+  border-radius: 999px;
+}
+
+.todo-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.todo-editor .field input {
+  color: var(--text);
+}
+
+.editor-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.editor-row .field {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+
+.editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.editor-actions .danger {
+  margin-left: auto;
+}
+
+/* Goals */
+.goal-card {
+  background: var(--card);
+  border-radius: 10px;
+  padding: 8px 12px 12px;
+  margin-bottom: 12px;
+}
+
+.goal-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.goal-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 10px 0;
+  font-size: 17px;
+  overflow-wrap: anywhere;
+}
+
+.goal-card.done .goal-title {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.todos-page button.small {
+  padding: 4px 10px;
+  font-size: 14px;
+}
+
+.steps {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.step .step-text {
+  flex: 1;
+  min-width: 0;
+  border-color: transparent;
+  background: none;
+  min-height: 44px;
+}
+
+.step .step-text:focus {
+  border-color: var(--line);
+  background: var(--card);
+}
+
+.step.done .step-text {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.step-add {
+  display: flex;
+  gap: 8px;
+}
+
+.step-add input {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+}
+
+.done-goals summary {
+  cursor: pointer;
+  color: var(--muted);
+  /* list-item keeps the disclosure triangle; the padding gives a 44px touch target. */
+  display: list-item;
+  padding: 12px 0;
+  margin-bottom: 8px;
 }
 
 /* Export reminder, above every page */

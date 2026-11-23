@@ -16,5 +16,7 @@ export default defineConfig({
     include: ['tests/**/*.test.{ts,tsx}'],
     // The first createTestDb() of a db test file starts PGlite (2 to 3 s on a small machine, longer when several files run at once).
     hookTimeout: 30_000,
+    // A fixed device zone, so deviceTimeZone() and the date labels in UI tests do not depend on the machine.
+    env: { TZ: 'Asia/Shanghai' },
   },
 });

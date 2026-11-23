@@ -166,6 +166,8 @@ describe('App: edges', () => {
   it('has 待办 and 设置 navigation items', async () => {
     renderShell();
     expect(screen.getByRole('button', { name: '待办' })).toBeInTheDocument();
+    // 待办 opens on the to-do page's 近期 tab.
+    expect(screen.getByRole('tab', { name: '近期' })).toHaveAttribute('aria-selected', 'true');
     await userEvent.click(screen.getByRole('button', { name: '设置' }));
     expect(await screen.findByRole('button', { name: '导出完整备份' })).toBeInTheDocument();
   });

@@ -3,10 +3,13 @@ import type { Services } from '../app/services';
 import { ExportReminder } from './ExportReminder';
 import { Settings } from './Settings';
 import { SyncBanner } from './SyncBanner';
-import { TodosTemp } from './TodosTemp';
+import { TodosPage } from './TodosPage';
 import { useSyncStatus } from './useSyncStatus';
 
 type Tab = 'todos' | 'settings';
+
+// The calendar arrives in Task 8; until then a 日历 mark on a to-do item has nowhere to go.
+const openDay = (): void => {};
 
 const NAV: { tab: Tab; label: string }[] = [
   { tab: 'todos', label: '待办' },
@@ -62,7 +65,7 @@ export function Shell({ services, confirmFn = defaultConfirm }: ShellProps) {
         </header>
         <main className="content">
           <ExportReminder services={services} onOpenSettings={tab === 'settings' ? undefined : () => setTab('settings')} />
-          {tab === 'todos' ? <TodosTemp repo={repo} engine={engine} /> : <Settings services={services} />}
+          {tab === 'todos' ? <TodosPage services={services} onOpenDay={openDay} /> : <Settings services={services} />}
         </main>
       </div>
     </div>
