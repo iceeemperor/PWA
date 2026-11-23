@@ -4,6 +4,7 @@ import { isNetworkLikeMessage } from '../domain/network-errors';
 import { contentKeys, defaultsOf } from '../domain/tables';
 import type {
   CommonFields,
+  EventFields,
   FieldsOf,
   NewFields,
   OpKind,
@@ -13,6 +14,7 @@ import type {
   TodoFields,
 } from '../domain/types';
 import type { LocalDb } from './local-db';
+import { validateEventFields } from './validate-event-fields';
 import { InvalidRecordError, validateTodoFields } from './validate-fields';
 
 export { InvalidRecordError };
@@ -97,6 +99,7 @@ const QUEUE = 'queue';
 // else on a record (`CommonFields`) is set by the repo or by the server. A later table adds its own entry here.
 interface TableSpec {
   defaults(): Record<string, unknown>;
+  /** Checks a whole record's content: a new record, or a stored one with an edit applied. */
   validate(fields: Record<string, unknown>): void;
 }
 
@@ -105,12 +108,9 @@ const SPECS: Record<TableName, TableSpec> = {
     defaults: () => defaultsOf('todos') as unknown as Record<string, unknown>,
     validate: (f) => validateTodoFields(f as Partial<TodoFields>),
   },
-  // Placeholder until the event field rules arrive (stage 2 Task 3): no event can be written yet.
   events: {
     defaults: () => defaultsOf('events') as unknown as Record<string, unknown>,
-    validate: () => {
-      throw new InvalidRecordError('events are not available yet');
-    },
+    validate: (f) => validateEventFields(f as unknown as EventFields),
   },
 };
 
@@ -132,8 +132,9 @@ const typed = <T extends TableName>(r: StoredRecord): RecordOf<T> => r as unknow
 
 type WriteTx = IDBPTransaction<unknown, string[], 'readwrite'>;
 
-// Thrown from inside a write when the record's state forbids it. Not storage failures, so `write` passes them through.
-const STATE_ERRORS = [TrashedRecordError, PurgedRecordError, RecordNotFoundError];
+// Thrown from inside a write when the record's state or its merged content forbids it. Not storage failures, so
+// `write` passes them through.
+const STATE_ERRORS = [TrashedRecordError, PurgedRecordError, RecordNotFoundError, InvalidRecordError];
 
 export function createRepo(db: LocalDb, deps: RepoDeps): Repo {
   const now = deps.now ?? (() => new Date());
@@ -234,11 +235,13 @@ export function createRepo(db: LocalDb, deps: RepoDeps): Repo {
 
     async update<T extends TableName>(t: T, id: string, changes: Partial<FieldsOf<T>>): Promise<RecordOf<T>> {
       const patch = contentOf(t, changes);
-      SPECS[t].validate(patch);
       return write(t, async (tx) => {
         const current = await load(tx, t, id);
         if (current.deleted_at !== null) throw new TrashedRecordError(`The ${t} record ${id} is in the trash`);
         if (Object.keys(patch).length === 0) return { result: typed<T>(current), changed: false };
+        // The whole record as it will be, not just the patch: a rule can span fields (an event's end and its stored
+        // start). Synchronous, so the transaction stays open.
+        SPECS[t].validate({ ...SPECS[t].defaults(), ...contentOf(t, current), ...patch });
         // `rev` stays: it is the server's, and the op's base_rev tells the server which version this edit saw.
         const next: StoredRecord = { ...current, ...patch, updated_at: now().toISOString() };
         await tx.objectStore(t).put(next);

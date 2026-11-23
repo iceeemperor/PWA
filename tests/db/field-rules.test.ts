@@ -3,6 +3,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { validateBackup } from '../../src/backup/validate';
+import { validateEventFields } from '../../src/data/validate-event-fields';
 import { validateTodoFields } from '../../src/data/validate-fields';
 import { createTestDb, TEST_USER_A as A, type TestDb } from './harness';
 
@@ -158,6 +159,131 @@ describe('field rules agree: Repo validator, backup validator, push_change (F4)'
     expect(await pushAccepts(field, value), 'push_change insert').toBe(ok);
     // created_at is set once on insert; an update ignores it whatever it holds.
     if (field !== 'created_at') expect(await updateAccepts(field, value), 'push_change update').toBe(ok);
+  });
+});
+
+// Events (stage 2): whole records, one rule broken (or kept) per case against a valid all-day event. The Repo and the
+// backup validator share validateEventFields, so the client column is that function; the backup column is added with
+// the backup validator itself (stage 2 Task 4).
+type EventCase = [name: string, over: Row, ok: boolean];
+const TIMED: Row = { all_day: false, starts_at: '2026-11-23T09:00', tz: 'Asia/Shanghai' };
+const EVENT_CASES: EventCase[] = [
+  ['an all-day event', {}, true],
+  ['an all-day event with an end', { ends_at: '2026-11-25' }, true],
+  ['an all-day event ending the same day', { ends_at: '2026-11-23' }, true],
+  ['a timed event', TIMED, true],
+  ['a timed event with an end', { ...TIMED, ends_at: '2026-11-24T08:00' }, true],
+  ['a timed event ending at its start', { ...TIMED, ends_at: '2026-11-23T09:00' }, true],
+  ['a timed event in UTC', { ...TIMED, tz: 'UTC' }, true],
+  ['a zone with a +', { ...TIMED, tz: 'Etc/GMT+5' }, true],
+  ['a three-part zone with an underscore', { ...TIMED, tz: 'America/Argentina/Buenos_Aires' }, true],
+  ['a leap day', { starts_at: '2028-02-29' }, true],
+  ['note, important and done set', { note: 'n', important: true, done: true }, true],
+  ['a padded title', { title: '  padded  ' }, true],
+  ['blank title', { title: ' ' }, false],
+  ['a full-width blank title', { title: '　' }, false],
+  ['a tab and newline title', { title: '\t\n' }, false],
+  ['a BOM title', { title: '﻿' }, false],
+  ['a non-string title', { title: 5 }, false],
+  ['a null title', { title: null }, false],
+  ['a NUL in the title', { title: `a${NUL}b` }, false],
+  ['a lone surrogate in the title', { title: `a${LONE_HI}b` }, false],
+  ['a null note', { note: null }, false],
+  ['a non-string note', { note: 5 }, false],
+  ['a lone surrogate in the note', { note: `a${LONE_LO}` }, false],
+  ['a non-boolean all_day', { all_day: 'yes' }, false],
+  ['a null all_day', { all_day: null }, false],
+  ['a non-boolean important', { important: 1 }, false],
+  ['a null done', { done: null }, false],
+  ['all-day with a time', { starts_at: '2026-11-23T09:00' }, false],
+  ['all-day with a tz', { tz: 'Asia/Shanghai' }, false],
+  ['timed without tz', { ...TIMED, tz: null }, false],
+  ['timed with seconds or offset', { ...TIMED, starts_at: '2026-11-23T09:00:00+08:00' }, false],
+  ['end before start', { ends_at: '2026-11-22' }, false],
+  ['end in the other form', { ends_at: '2026-11-23T10:00' }, false],
+  ['a timed end before start', { ...TIMED, ends_at: '2026-11-23T08:59' }, false],
+  ['a timed end in the all-day form', { ...TIMED, ends_at: '2026-11-24' }, false],
+  ['hour 24', { ...TIMED, starts_at: '2026-11-23T24:00' }, false],
+  ['minute 60', { ...TIMED, starts_at: '2026-11-23T09:60' }, false],
+  ['a timed start without a time', { ...TIMED, starts_at: '2026-11-23' }, false],
+  ['an empty start', { starts_at: '' }, false],
+  ['a null start', { starts_at: null }, false],
+  ['a non-string start', { starts_at: 20261123 }, false],
+  ['an unpadded date', { starts_at: '2026-1-5' }, false],
+  ['a five-digit year', { starts_at: '10000-01-01' }, false],
+  ['a trailing newline in the date', { starts_at: '2026-11-23\n' }, false],
+  ['a tz with a space', { ...TIMED, tz: 'Asia/ Shanghai' }, false],
+  ['a tz starting with a slash', { ...TIMED, tz: '/Asia' }, false],
+  ['an empty tz', { ...TIMED, tz: '' }, false],
+  ['an offset as the tz', { ...TIMED, tz: '+08:00' }, false],
+  ['a non-string tz', { ...TIMED, tz: 5 }, false],
+  ['rrule set', { rrule: 'FREQ=DAILY' }, false],
+];
+// The only allowed disagreements: values whose shape the server's CHECKs accept but that the client refuses, because
+// a CHECK cannot consult a calendar or the time-zone database. The client is the stricter side, never the looser one.
+const CLIENT_ONLY_REFUSALS: [name: string, over: Row][] = [
+  // Not a day on the calendar: the server checks only the \d{4}-\d{2}-\d{2} shape of these text columns.
+  ['an impossible all-day date', { starts_at: '2026-02-30' }],
+  ['an impossible end date', { ends_at: '2026-11-31' }],
+  ['year 0000', { starts_at: '0000-01-01' }],
+  ['an impossible date in a timed start', { ...TIMED, starts_at: '2026-02-30T09:00' }],
+  ['an impossible month in a timed end', { ...TIMED, ends_at: '2026-13-01T09:00' }],
+  // Shaped like a zone name, but no such zone: the server checks only the name's form.
+  ['a zone that does not exist', { ...TIMED, tz: 'Mars/Base' }],
+];
+
+const goodEvent = (over: Row): Row => ({
+  title: '会', all_day: true, starts_at: '2026-11-23', ends_at: null, tz: null, note: '', important: false, done: false, rrule: null,
+  ...over,
+});
+
+function eventClientAccepts(over: Row): boolean {
+  try {
+    validateEventFields(goodEvent(over) as never);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Inserts the whole event through push_change. A request the database cannot even parse counts as refused. */
+async function eventPushAccepts(over: Row): Promise<boolean> {
+  await t.asUser(A);
+  const op = { op_id: randomUUID(), id: randomUUID(), kind: 'insert', base_rev: null, fields: goodEvent(over) };
+  try {
+    const r = (await t.pg.query<{ r: Row }>('select push_change($1, $2::jsonb) as r', ['events', JSON.stringify(op)])).rows[0].r;
+    return r.status === 'applied';
+  } catch {
+    return false;
+  }
+}
+
+/** The same record as an update of a live all-day event (the CHECKs see the merged row). */
+async function eventUpdateAccepts(over: Row): Promise<boolean> {
+  await t.asUser(A);
+  const id = randomUUID();
+  const ins = { op_id: randomUUID(), id, kind: 'insert', base_rev: null, fields: goodEvent({}) };
+  const first = (await t.pg.query<{ r: Row }>('select push_change($1, $2::jsonb) as r', ['events', JSON.stringify(ins)])).rows[0].r;
+  const upd = { op_id: randomUUID(), id, kind: 'update', base_rev: first.rev, fields: goodEvent(over) };
+  try {
+    const r = (await t.pg.query<{ r: Row }>('select push_change($1, $2::jsonb) as r', ['events', JSON.stringify(upd)])).rows[0].r;
+    return r.status === 'applied';
+  } catch {
+    return false;
+  }
+}
+
+describe('event field rules agree: validateEventFields and push_change (stage 2)', () => {
+  it.each(EVENT_CASES.map((c) => [`${c[0]} → ${c[2] ? 'ok' : 'refused'}`, c] as const))('%s', async (_n, [, over, ok]) => {
+    expect(eventClientAccepts(over), 'validateEventFields').toBe(ok);
+    expect(await eventPushAccepts(over), 'push_change insert').toBe(ok);
+    expect(await eventUpdateAccepts(over), 'push_change update').toBe(ok);
+  });
+
+  it.each(CLIENT_ONLY_REFUSALS)('expected exception: %s is refused by the client, accepted by the server', async (_n, over) => {
+    expect(eventClientAccepts(over), 'validateEventFields').toBe(false);
+    expect(await eventPushAccepts(over), 'push_change insert').toBe(true);
+    expect(await eventUpdateAccepts(over), 'push_change update').toBe(true);
   });
 });
 

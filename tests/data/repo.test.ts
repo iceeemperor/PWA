@@ -323,14 +323,34 @@ describe('repo', () => {
     expect(await ops()).toHaveLength(0);
   });
 
-  it('refuses every events write until events are available, and leaves nothing behind', async () => {
-    const e = await repo.create('events', { title: '会', starts_at: '2026-11-23' }).catch((x: unknown) => x);
-    expect(e).toBeInstanceOf(InvalidRecordError);
-    expect((e as Error).message).toBe('events are not available yet');
-    await db.raw.put('events', { ...TABLE_DEFAULTS.events, id: 'e1', user_id: U, title: 'x', starts_at: '2026-11-23', created_at: 'c', updated_at: 'u', rev: 1, deleted_at: null, purged_at: null });
-    await expect(repo.update('events', 'e1', { title: 'y' })).rejects.toBeInstanceOf(InvalidRecordError);
-    expect(await db.raw.get('events', 'e1')).toMatchObject({ title: 'x' });
-    expect(await ops()).toHaveLength(0);
+  it('update validates the merged record: an end before the stored start is refused', async () => {
+    const e = await repo.create('events', { title: 'x', starts_at: '2026-11-23' }); await expect(repo.update('events', e.id, { ends_at: '2026-11-20' })).rejects.toThrow(InvalidRecordError);
+  });
+
+  it('creates and edits events under the event rules, and leaves nothing behind when refused', async () => {
+    const e = await repo.create('events', { title: '会', starts_at: '2026-11-23' });
+    expect(e).toMatchObject({ ...TABLE_DEFAULTS.events, title: '会', starts_at: '2026-11-23' });
+    await expect(repo.create('events', { title: '会', starts_at: '2026-02-30' })).rejects.toBeInstanceOf(InvalidRecordError);
+    await expect(repo.create('events', { title: ' ', starts_at: '2026-11-23' })).rejects.toThrow('title must not be blank');
+    // Turning it into a timed event needs the time and the zone in the same edit.
+    await expect(repo.update('events', e.id, { all_day: false })).rejects.toBeInstanceOf(InvalidRecordError);
+    await expect(repo.update('events', e.id, { ends_at: '2026-11-20' })).rejects.toThrow('ends_at must not be before starts_at');
+    const timed = await repo.update('events', e.id, { all_day: false, starts_at: '2026-11-23T09:00', tz: 'Asia/Shanghai' });
+    expect(timed).toMatchObject({ all_day: false, starts_at: '2026-11-23T09:00', tz: 'Asia/Shanghai' });
+    await expect(repo.update('events', e.id, { tz: 'Mars/Base' })).rejects.toBeInstanceOf(InvalidRecordError);
+    expect(await db.raw.get('events', e.id)).toMatchObject({ starts_at: '2026-11-23T09:00', tz: 'Asia/Shanghai' });
+    // The queued update carries only the patch.
+    const q = await ops();
+    expect(q).toHaveLength(2);
+    expect(q[1]).toMatchObject({ table: 'events', kind: 'update', fields: { all_day: false, starts_at: '2026-11-23T09:00', tz: 'Asia/Shanghai' } });
+  });
+
+  it('update validates todos against the stored record too', async () => {
+    const r = await repo.create('todos', { title: 'a' });
+    // A stored record that has gone bad (not something the repo writes) cannot be edited until it is fixed.
+    await db.raw.put('todos', { ...(await rawTodo(r.id)), priority: 'urgent' });
+    await expect(repo.update('todos', r.id, { done: true })).rejects.toBeInstanceOf(InvalidRecordError);
+    await expect(repo.update('todos', r.id, { priority: 'low', done: true })).resolves.toMatchObject({ priority: 'low', done: true });
   });
 
   it('create takes its defaults from TABLE_DEFAULTS without sharing them', async () => {
