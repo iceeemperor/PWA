@@ -1,6 +1,6 @@
 // Business rules for the 近期 (upcoming) list and the 目标 (goals) list. Pure functions, no UI.
 import type { EventRecord, TodoRecord } from '../domain/types';
-import { addDays, localDateOf, localTimeOf, zonedToInstant } from '../domain/time';
+import { addDays, isTimeZone, localDateOf, localTimeOf, zonedToInstant } from '../domain/time';
 
 export const AGENDA_DAYS = 14;
 
@@ -44,7 +44,7 @@ function eventWhen(e: EventRecord, tz: string): { date: string; time: string | n
 
 /** The date of an event in the device zone `tz`; all-day events keep their own date. Never throws. */
 export function eventDate(e: EventRecord, tz: string): string {
-  return eventWhen(e, tz).date;
+  return eventWhen(e, isTimeZone(tz) ? tz : 'UTC').date;
 }
 
 const live = (r: { deleted_at: string | null; purged_at: string | null }): boolean => r.deleted_at === null && r.purged_at === null;
@@ -105,9 +105,10 @@ export function buildAgenda(
   events: EventRecord[],
   o: { now: Date; tz: string; mode: SortMode; showDone: boolean },
 ): Agenda {
-  const today = localDateOf(o.now, o.tz);
+  const tz = isTimeZone(o.tz) ? o.tz : 'UTC';
+  const today = localDateOf(o.now, tz);
   const end = addDays(today, AGENDA_DAYS);
-  const items = toItems(todos, events, o.tz, today);
+  const items = toItems(todos, events, tz, today);
   const open = items.filter((i) => !i.done && (i.date === null || i.date <= end));
   const byPriority = o.mode === 'priority';
   open.sort((a, b) => compare(a, b, today, byPriority));

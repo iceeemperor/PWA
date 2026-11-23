@@ -126,4 +126,12 @@ describe('agenda (additional)', () => {
     const [i] = all(buildAgenda([], [event({ important: true })], o()));
     expect(i).toMatchObject({ source: 'event', priority: 'high', time: null });
   });
+  it('an invalid device zone falls back to UTC instead of throwing', () => {
+    const now = new Date('2026-11-23T17:00:00Z');
+    const e = event({ title: 'ev', important: true, all_day: false, starts_at: '2026-11-24T23:30', tz: 'Asia/Shanghai' });
+    expect(eventDate(e, 'Nope/Zone')).toBe('2026-11-24');
+    const a = buildAgenda([todo({ title: 'due23', due_date: '2026-11-23' })], [e], o({ now, tz: 'Nope/Zone' }));
+    expect(all(a).find(i => i.title === 'due23')!.overdue).toBe(false);
+    expect(all(a).find(i => i.title === 'ev')).toMatchObject({ date: '2026-11-24', time: '15:30' });
+  });
 });
