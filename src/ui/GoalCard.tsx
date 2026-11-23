@@ -1,12 +1,12 @@
-import { useEffect, useState, type FormEvent, type KeyboardEvent } from 'react';
-import type { Repo } from '../data/repo';
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { RecordNotFoundError, type Repo } from '../data/repo';
 import { newId as defaultNewId } from '../domain/ids';
 import type { Step, TodoRecord } from '../domain/types';
 import { useWriteAttempt, WriteError } from './write-error';
 
 export interface GoalCardProps {
   goal: TodoRecord;
-  repo: Pick<Repo, 'update' | 'remove'>;
+  repo: Pick<Repo, 'get' | 'update' | 'remove'>;
   newId?: () => string;
 }
 
@@ -48,7 +48,9 @@ function StepRow({ step, onTick, onRename, onDelete }: StepRowProps) {
 
   return (
     <li className={step.done ? 'step done' : 'step'}>
-      <input type="checkbox" aria-label={step.text} checked={step.done} onChange={(e) => onTick(e.target.checked)} />
+      <label className="hit">
+        <input type="checkbox" aria-label={step.text} checked={step.done} onChange={(e) => onTick(e.target.checked)} />
+      </label>
       <input
         className="step-text"
         aria-label="步骤内容"
@@ -73,24 +75,43 @@ export function GoalCard({ goal, repo, newId = defaultNewId }: GoalCardProps) {
   const { error, attempt } = useWriteAttempt();
   const [draft, setDraft] = useState('');
 
-  const writeSteps = (steps: Step[]) => attempt(() => repo.update('todos', goal.id, { steps }));
+  // Step writes run one at a time, and each applies its change by step id to the newest stored steps, not to the
+  // rendered copy: a second quick action (or a pull) between render and re-read must not be overwritten.
+  // The chain moves on after a failed link too (`.then(run, run)`), so one failure cannot block later writes.
+  const chain = useRef<Promise<unknown>>(Promise.resolve());
+  function changeSteps(change: (steps: Step[]) => Step[]): Promise<boolean> {
+    const run = () =>
+      attempt(async () => {
+        const fresh = await repo.get('todos', goal.id);
+        if (!fresh) throw new RecordNotFoundError(`No todos record with id ${goal.id}`);
+        await repo.update('todos', goal.id, { steps: change(fresh.steps) });
+      });
+    const next = chain.current.then(run, run);
+    chain.current = next;
+    return next;
+  }
+  const setStep = (id: string, patch: Partial<Step>) =>
+    changeSteps((steps) => steps.map((s) => (s.id === id ? { ...s, ...patch } : s)));
 
   async function addStep(e: FormEvent) {
     e.preventDefault();
     const text = draft.trim();
     if (!text) return;
-    if (await writeSteps([...goal.steps, { id: newId(), text, done: false }])) setDraft('');
+    const step: Step = { id: newId(), text, done: false };
+    if (await changeSteps((steps) => [...steps, step])) setDraft('');
   }
 
   return (
     <article className={goal.done ? 'goal-card done' : 'goal-card'}>
       <header className="goal-head">
-        <input
-          type="checkbox"
-          aria-label={goal.title}
-          checked={goal.done}
-          onChange={(e) => void attempt(() => repo.update('todos', goal.id, { done: e.target.checked }))}
-        />
+        <label className="hit">
+          <input
+            type="checkbox"
+            aria-label={goal.title}
+            checked={goal.done}
+            onChange={(e) => void attempt(() => repo.update('todos', goal.id, { done: e.target.checked }))}
+          />
+        </label>
         <h3 className="goal-title">{goal.title}</h3>
         <button
           type="button"
@@ -108,9 +129,9 @@ export function GoalCard({ goal, repo, newId = defaultNewId }: GoalCardProps) {
             <StepRow
               key={step.id}
               step={step}
-              onTick={(done) => void writeSteps(goal.steps.map((s) => (s.id === step.id ? { ...s, done } : s)))}
-              onRename={(text) => writeSteps(goal.steps.map((s) => (s.id === step.id ? { ...s, text } : s)))}
-              onDelete={() => void writeSteps(goal.steps.filter((s) => s.id !== step.id))}
+              onTick={(done) => void setStep(step.id, { done })}
+              onRename={(text) => setStep(step.id, { text })}
+              onDelete={() => void changeSteps((steps) => steps.filter((s) => s.id !== step.id))}
             />
           ))}
         </ul>

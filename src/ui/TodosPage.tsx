@@ -245,7 +245,9 @@ function AgendaRow({ item, note, today, onTick, onEdit, onOpenDay }: AgendaRowPr
   if (item.overdue) classes.push('overdue');
   return (
     <li className={classes.join(' ')}>
-      <input type="checkbox" aria-label={item.title} checked={item.done} onChange={(e) => onTick(e.target.checked)} />
+      <label className="hit">
+        <input type="checkbox" aria-label={item.title} checked={item.done} onChange={(e) => onTick(e.target.checked)} />
+      </label>
       <div className="agenda-main">
         {onEdit ? (
           <button type="button" className="agenda-title" onClick={onEdit}>
@@ -261,7 +263,7 @@ function AgendaRow({ item, note, today, onTick, onEdit, onOpenDay }: AgendaRowPr
           {item.overdue && <span className="overdue-mark">已过期</span>}
           {item.source === 'event' && item.date && (
             <button type="button" className="cal-mark" aria-label={`日历：打开${label}`} onClick={() => onOpenDay(item.date!)}>
-              日历
+              <span className="cal-pill">日历</span>
             </button>
           )}
         </div>

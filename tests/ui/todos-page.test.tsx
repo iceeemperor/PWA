@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Services } from '../../src/app/services';
@@ -301,6 +301,95 @@ describe('goals', () => {
     await waitFor(async () => expect((await s.repo.get('todos', goal.id))?.steps).toEqual([{ id: 's1', text: '买泳镜和泳帽', done: false }]));
   });
 
+  async function seedTwoSteps() {
+    return s.repo.create('todos', {
+      title: '学游泳', kind: 'goal',
+      steps: [{ id: 'a', text: '买泳镜', done: false }, { id: 'b', text: '报名', done: false }],
+    });
+  }
+
+  it('rename one step, then tick another at once: both survive', async () => {
+    const goal = await seedTwoSteps();
+    await openGoals();
+    const field = await screen.findByDisplayValue('买泳镜');
+    // No await between the actions: the second fires before the list re-reads.
+    fireEvent.focus(field);
+    fireEvent.change(field, { target: { value: '买泳镜和泳帽' } });
+    fireEvent.blur(field);
+    fireEvent.click(screen.getByRole('checkbox', { name: '报名' }));
+    await waitFor(async () =>
+      expect((await s.repo.get('todos', goal.id))?.steps).toEqual([
+        { id: 'a', text: '买泳镜和泳帽', done: false },
+        { id: 'b', text: '报名', done: true },
+      ]),
+    );
+  });
+
+  it('two quick ticks on different steps: both survive', async () => {
+    const goal = await seedTwoSteps();
+    await openGoals();
+    const a = await screen.findByRole('checkbox', { name: '买泳镜' });
+    const b = screen.getByRole('checkbox', { name: '报名' });
+    fireEvent.click(a);
+    fireEvent.click(b);
+    await waitFor(async () =>
+      expect((await s.repo.get('todos', goal.id))?.steps.map((x) => x.done)).toEqual([true, true]),
+    );
+  });
+
+  it('a step change stored after the render (a pull) is not overwritten', async () => {
+    const goal = await seedTwoSteps();
+    await openGoals();
+    const box = await screen.findByRole('checkbox', { name: '买泳镜' });
+    // Another device renamed 报名 and added a step; written without telling the page, like a pull mid-run.
+    const stored = await s.repo.get('todos', goal.id);
+    await s.db.raw.put('todos', {
+      ...stored!,
+      steps: [{ id: 'a', text: '买泳镜', done: false }, { id: 'b', text: '报名游泳班', done: false }, { id: 'c', text: '下水', done: false }],
+    });
+    fireEvent.click(box);
+    await waitFor(async () =>
+      expect((await s.repo.get('todos', goal.id))?.steps).toEqual([
+        { id: 'a', text: '买泳镜', done: true },
+        { id: 'b', text: '报名游泳班', done: false },
+        { id: 'c', text: '下水', done: false },
+      ]),
+    );
+  });
+
+  it('every checkbox sits in a .hit touch box (sized 44px in styles.css)', async () => {
+    await seedTwoSteps();
+    await openGoals();
+    await screen.findByRole('checkbox', { name: '报名' });
+    const boxes = screen.getAllByRole('checkbox');
+    expect(boxes).toHaveLength(3); // the goal and its two steps
+    for (const box of boxes) expect(box.parentElement).toHaveClass('hit');
+  });
+
+  it('a failed step write does not jam the next one, and its error still shows', async () => {
+    const goal = await seedTwoSteps();
+    await openGoals();
+    const a = await screen.findByRole('checkbox', { name: '买泳镜' });
+    const b = screen.getByRole('checkbox', { name: '报名' });
+    const realUpdate = s.repo.update.bind(s.repo);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    vi.spyOn(s.repo, 'update')
+      .mockRejectedValueOnce(new LocalWriteError('full'))
+      .mockImplementationOnce(async (...args: Parameters<typeof realUpdate>) => {
+        await gate;
+        return realUpdate(...args);
+      });
+    fireEvent.click(a);
+    fireEvent.click(b);
+    // The first write failed: its message shows while the second is still running.
+    expect(await screen.findByText('保存失败')).toBeInTheDocument();
+    release();
+    await waitFor(async () =>
+      expect((await s.repo.get('todos', goal.id))?.steps.map((x) => x.done)).toEqual([false, true]),
+    );
+  });
+
   it('a done goal moves under 已完成的目标, collapsed', async () => {
     const goal = await s.repo.create('todos', { title: '学游泳', kind: 'goal' });
     await s.repo.create('todos', { title: '读完一本书', kind: 'goal' });
@@ -338,6 +427,12 @@ it('a refused write shows 保存失败 and keeps the form', async () => {
   await userEvent.type(screen.getByPlaceholderText('新待办'), '买牛奶{enter}');
   expect(await screen.findByText('保存失败')).toBeInTheDocument();
   expect(screen.getByPlaceholderText('新待办')).toHaveValue('买牛奶');
+});
+
+it('the upcoming row checkbox sits in a .hit touch box', async () => {
+  await s.repo.create('todos', { title: '买菜' });
+  renderPage();
+  expect((await screen.findByRole('checkbox', { name: '买菜' })).parentElement).toHaveClass('hit');
 });
 
 it('a refused tick shows 保存失败 and does not crash', async () => {
