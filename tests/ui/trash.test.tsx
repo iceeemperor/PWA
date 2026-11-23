@@ -32,6 +32,8 @@ async function trash(t: 'todos' | 'events', fields: Record<string, unknown>, del
 describe('daysUntilPurge', () => {
   it('never goes below 0', () => expect(daysUntilPurge('2026-10-01T00:00:00Z', new Date('2026-11-23T04:00:00Z'))).toBe(0));
   it('is 30 on the day of deletion', () => expect(daysUntilPurge('2026-11-23T01:00:00Z', new Date('2026-11-23T04:00:00Z'))).toBe(30));
+  it('clamps a future deleted_at to 30', () => expect(daysUntilPurge('2026-12-25T00:00:00Z', new Date('2026-11-23T04:00:00Z'))).toBe(30));
+  it('returns 30 for an invalid date', () => expect(daysUntilPurge('not a date', new Date('2026-11-23T04:00:00Z'))).toBe(30));
   it('counts whole days', () => expect(daysUntilPurge('2026-11-13T04:00:01Z', new Date('2026-11-23T04:00:00Z'))).toBe(21));
 });
 
@@ -52,6 +54,23 @@ describe('TrashSection', () => {
     expect(todoTitles).toEqual(['新待办', '一个目标', '旧待办']);
     expect(screen.getByText('目标')).toBeTruthy();
     expect(screen.getByText('删除的内容在这里保留 30 天，之后永久清除')).toBeTruthy();
+  });
+
+  it('shows 还剩 30 天 for a future deleted_at', async () => {
+    await trash('todos', { title: '未来' }, '2026-12-25T00:00:00Z');
+    render(<TrashSection services={services} />);
+    await screen.findByText('未来');
+    expect(screen.getByText('还剩 30 天')).toBeTruthy();
+  });
+
+  it('keeps an invalid deleted_at listed and restorable, with no NaN', async () => {
+    const rec = await trash('todos', { title: '坏日期' }, 'garbage');
+    const { container } = render(<TrashSection services={services} />);
+    await screen.findByText('坏日期');
+    expect(container.textContent).not.toContain('NaN');
+    await userEvent.click(screen.getByRole('button', { name: '恢复' }));
+    await waitFor(() => expect(screen.queryByText('坏日期')).toBeNull());
+    expect((await services.repo.get('todos', rec.id))!.deleted_at).toBeNull();
   });
 
   it('shows 无标题 and 即将清除', async () => {

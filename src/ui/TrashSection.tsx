@@ -10,13 +10,17 @@ const KEEP_DAYS = 30;
 
 /** Whole days the record stays in the trash: exactly 30 on the day of deletion, never below 0. */
 export function daysUntilPurge(deletedAt: string, now: Date): number {
-  const elapsed = Math.floor((now.getTime() - new Date(deletedAt).getTime()) / DAY_MS);
-  return Math.max(0, KEEP_DAYS - elapsed);
+  const t = new Date(deletedAt).getTime();
+  if (Number.isNaN(t)) return KEEP_DAYS;
+  const elapsed = Math.floor((now.getTime() - t) / DAY_MS);
+  // A skewed clock on another device can put deleted_at in the future: never show more than 30.
+  return Math.min(KEEP_DAYS, Math.max(0, KEEP_DAYS - elapsed));
 }
 
 /** M月D日 in the device zone. */
 function dateText(iso: string): string {
   const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
   return `${d.getMonth() + 1}月${d.getDate()}日`;
 }
 
