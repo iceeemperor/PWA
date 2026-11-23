@@ -292,6 +292,37 @@ describe('pull_changes: beyond the brief', () => {
   });
 });
 
+describe('pull_changes and purge_expired: events (stage 2)', () => {
+  async function pushEvent(uid: string, kind: 'insert' | 'delete', id: string, fields: Row = {}): Promise<Row> {
+    await t.asUser(uid);
+    const op = { op_id: randomUUID(), id, kind, base_rev: 0, fields };
+    return (await t.pg.query<{ r: Row }>('select push_change($1, $2::jsonb) as r', ['events', JSON.stringify(op)])).rows[0].r;
+  }
+  it('an events tombstone is in the pull result, with default content, next to todos', async () => {
+    const ev = randomUUID();
+    expect((await pushEvent(A, 'insert', ev, { title: 'secret', all_day: true, starts_at: '2026-11-23', note: 'n' })).status).toBe('applied');
+    const [todo] = await seed(A, 1);
+    const cursor = Number((await rowOfRaw(t, ev, 'events')).rev);
+    await trashAtRaw(t, ev, 31, 'events'); await purgeAsCron();
+    const p = await pull(A, 0, 100);
+    expect(p.rows.map(r => [r.table, r.row.id])).toEqual([['todos', todo], ['events', ev]]);
+    expect(p.rows[1].row).toMatchObject({
+      user_id: A, title: '', all_day: true, starts_at: '', ends_at: null, tz: null, note: '', important: false, done: false, rrule: null,
+      purged_at: expect.any(String), deleted_at: expect.any(String) });
+    // A device whose cursor sits at the event's old rev still pulls the tombstone.
+    expect(ids(await pull(A, cursor, 100))).toContain(ev);
+    expect(ids(await pull(B, 0, 100))).toEqual([]);
+  });
+  it('a pushed delete on an event shows up in the pull with deleted_at', async () => {
+    const ev = randomUUID();
+    await pushEvent(A, 'insert', ev, { title: 'x', all_day: true, starts_at: '2026-11-23' });
+    expect((await pushEvent(A, 'delete', ev)).status).toBe('applied');
+    const p = await pull(A, 0, 100);
+    expect(p.rows).toHaveLength(1);
+    expect(p.rows[0]).toMatchObject({ table: 'events', row: { id: ev, deleted_at: expect.any(String), purged_at: null, title: 'x' } });
+  });
+});
+
 describe('purge_expired: beyond the brief', () => {
   it('purges what was trashed 30 days and 1 hour ago, leaves 29 days and 23 hours', async () => {
     const [young, old] = await seed(A, 2);

@@ -100,23 +100,29 @@ async function asSuperuser<T>(t: TestDb, fn: () => Promise<T>): Promise<T> {
   finally { if (role !== 'postgres') await t.pg.exec(`set role ${role}`); }
 }
 
-function noRow(id: string): Error { return new Error(`no todos row ${id}`); }
+function noRow(id: string, table = 'todos'): Error { return new Error(`no ${table} row ${id}`); }
 
-/** The whole row, whoever owns it. Throws if there is none. */
-export function rowOf(t: TestDb, id: string): Promise<TodoRow> {
+// Table names are interpolated into SQL, so only plain lower-case identifiers are accepted.
+function tableName(table: string): string {
+  if (!/^[a-z_]+$/.test(table)) throw new Error(`bad table name ${table}`);
+  return table;
+}
+
+/** The whole row of `table` (default todos), whoever owns it. Throws if there is none. */
+export function rowOf(t: TestDb, id: string, table = 'todos'): Promise<TodoRow> {
   return asSuperuser(t, async () => {
-    const r = await t.pg.query<TodoRow>('select * from todos where id = $1', [id]);
-    if (r.rows.length === 0) throw noRow(id);
+    const r = await t.pg.query<TodoRow>(`select * from ${tableName(table)} where id = $1`, [id]);
+    if (r.rows.length === 0) throw noRow(id, table);
     return r.rows[0];
   });
 }
 
-/** Put the row in the trash `daysAgo` days ago (bumps rev through the trigger, like any write). */
-export function trashAt(t: TestDb, id: string, daysAgo: number): Promise<void> {
+/** Put the row of `table` (default todos) in the trash `daysAgo` days ago (bumps rev through the trigger, like any write). */
+export function trashAt(t: TestDb, id: string, daysAgo: number, table = 'todos'): Promise<void> {
   return asSuperuser(t, async () => {
     const r = await t.pg.query(
-      `update todos set deleted_at = now() - $2::float8 * interval '1 day' where id = $1`, [id, daysAgo]);
-    if (r.affectedRows !== 1) throw noRow(id);
+      `update ${tableName(table)} set deleted_at = now() - $2::float8 * interval '1 day' where id = $1`, [id, daysAgo]);
+    if (r.affectedRows !== 1) throw noRow(id, table);
   });
 }
 

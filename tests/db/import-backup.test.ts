@@ -192,6 +192,45 @@ describe('import_backup: edge cases', () => {
   });
 });
 
+describe('import_backup: events (stage 2)', () => {
+  /** An event as it appears in an export file. */
+  const ev = (over: Row = {}): Row => ({
+    id: randomUUID(), title: 'meeting', all_day: false, starts_at: '2026-11-23T09:00', ends_at: '2026-11-23T10:00',
+    tz: 'Asia/Shanghai', note: 'n', important: true, done: false, rrule: null,
+    created_at: '2025-01-01T00:00:00Z', updated_at: '2025-02-02T00:00:00Z', deleted_at: null, ...over,
+  });
+  const eventRow = (id: string) => rowOfRaw(t, id, 'events');
+
+  it('events rows are added as they are and keep updated_at', async () => {
+    const e = ev({ id: id1 });
+    const r = await impRaw(A, { tables: { events: [e], todos: [row({ id: id2 })] } });
+    expect(r).toEqual({ added: 2, restored: 0, skipped: {} });
+    const stored = await eventRow(id1);
+    expect(stored).toMatchObject({
+      user_id: A, title: 'meeting', all_day: false, starts_at: '2026-11-23T09:00', ends_at: '2026-11-23T10:00',
+      tz: 'Asia/Shanghai', note: 'n', important: true, done: false, rrule: null, purged_at: null, deleted_at: null,
+      created_at: new Date('2025-01-01T00:00:00Z'), updated_at: new Date('2025-02-02T00:00:00Z'),
+    });
+    expect(Number(stored.rev)).toBeGreaterThan(0);
+  });
+  it('an invalid event aborts the whole import', async () => {
+    await expect(impRaw(A, { tables: { events: [ev({ id: id1 }), ev({ id: id2, tz: null })], todos: [row()] } })).rejects.toThrow(/check constraint/);
+    expect(await count(A)).toBe(0);
+    await t.asRole('postgres');
+    expect((await t.pg.query('select id from events')).rows).toEqual([]);
+  });
+  it('an event tombstone is skipped by default and restored when asked', async () => {
+    await impRaw(A, { tables: { events: [ev({ id: id1 })] } });
+    await t.asRole('postgres');
+    await t.pg.query(`update events set deleted_at = now() - interval '31 days' where id = $1`, [id1]);
+    await purgeAsCron();
+    expect((await eventRow(id1)).purged_at).not.toBeNull();
+    expect(await impRaw(A, { tables: { events: [ev({ id: id1 })] } })).toMatchObject({ skipped: { purged: 1 } });
+    expect(await impRaw(A, { tables: { events: [ev({ id: id1, title: 'back' })] } }, true)).toMatchObject({ restored: 1 });
+    expect(await eventRow(id1)).toMatchObject({ title: 'back', tz: 'Asia/Shanghai', purged_at: null });
+  });
+});
+
 describe('import_backup: server-managed keys and the setting (F7)', () => {
   it('garbage in user_id, rev and purged_at is ignored, not an abort (add and restore)', async () => {
     const garbage = { user_id: 'not-a-uuid', rev: 'abc', purged_at: 'whenever' };

@@ -164,13 +164,13 @@ describe('todos: constraints', () => {
 });
 
 describe('sync bookkeeping tables', () => {
-  it('sync_tables lists todos and is readable but not writable by signed-in users', async () => {
+  it('sync_tables lists events and todos and is readable but not writable by signed-in users', async () => {
     await t.asUser(A);
-    expect((await t.pg.query('select name, copy_fields from sync_tables')).rows).toEqual([{ name: 'todos', copy_fields: [] }]);
+    expect((await t.pg.query('select name, copy_fields from sync_tables order by name')).rows).toEqual([{ name: 'events', copy_fields: [] }, { name: 'todos', copy_fields: [] }]);
     await expect(t.pg.query(`insert into sync_tables (name) values ('x')`)).rejects.toThrow(/permission denied/);
     await expect(t.pg.query(`update sync_tables set copy_fields = '{title}'`)).rejects.toThrow(/permission denied/);
     await expect(t.pg.query('delete from sync_tables')).rejects.toThrow(/permission denied/);
-    await t.asRole('postgres'); expect((await t.pg.query('select * from sync_tables')).rows).toEqual([{ name: 'todos', copy_fields: [] }]);
+    await t.asRole('postgres'); expect((await t.pg.query('select * from sync_tables order by name')).rows).toEqual([{ name: 'events', copy_fields: [] }, { name: 'todos', copy_fields: [] }]);
   });
   it('anon cannot read or write sync_tables', async () => {
     await t.asRole('anon');
@@ -238,7 +238,7 @@ describe('privileges', () => {
     expect((await t.pg.query('select id from todos')).rows).toHaveLength(1);
   });
   it('anon has no privilege on any table', async () => {
-    for (const table of ['todos', 'applied_ops', 'sync_tables'])
+    for (const table of ['todos', 'events', 'applied_ops', 'sync_tables'])
       for (const priv of ['select', 'insert', 'update', 'delete', 'truncate', 'references', 'trigger']) expect(await can('anon', priv, table), `${table} ${priv}`).toBe(false);
   });
   it('signed-in users cannot truncate todos or applied_ops, and anon cannot truncate todos', async () => {
@@ -300,6 +300,8 @@ describe('migration on a project with the old default grants', () => {
       expect({
         'todos authenticated': await granted('has_table_privilege', 'authenticated', 'todos', tablePrivs),
         'todos anon': await granted('has_table_privilege', 'anon', 'todos', tablePrivs),
+        'events authenticated': await granted('has_table_privilege', 'authenticated', 'events', tablePrivs),
+        'events anon': await granted('has_table_privilege', 'anon', 'events', tablePrivs),
         'applied_ops authenticated': await granted('has_table_privilege', 'authenticated', 'applied_ops', tablePrivs),
         'applied_ops anon': await granted('has_table_privilege', 'anon', 'applied_ops', tablePrivs),
         'sync_tables authenticated': await granted('has_table_privilege', 'authenticated', 'sync_tables', tablePrivs),
@@ -309,6 +311,8 @@ describe('migration on a project with the old default grants', () => {
       }).toEqual({
         'todos authenticated': ['select'],
         'todos anon': [],
+        'events authenticated': ['select'],
+        'events anon': [],
         'applied_ops authenticated': [],
         'applied_ops anon': [],
         'sync_tables authenticated': ['select'],
