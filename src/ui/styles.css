@@ -876,6 +876,7 @@ textarea:focus-visible {
 }
 
 .event-dot {
+  position: relative;
   width: 6px;
   height: 6px;
   border-radius: 50%;
@@ -883,11 +884,22 @@ textarea:focus-visible {
 }
 
 .event-dot.important {
-  background: #2f5bea;
+  background: var(--brand);
 }
 
 .event-dot.done-important {
-  opacity: 0.45;
+  opacity: 0.6;
+}
+
+/* A line through the dot: the calendar form of the strike-through. */
+.event-dot.done-important::after {
+  content: "";
+  position: absolute;
+  left: -2px;
+  right: -2px;
+  top: 50%;
+  height: 1.5px;
+  background: var(--text);
 }
 
 .day-header {

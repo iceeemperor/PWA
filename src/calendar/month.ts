@@ -1,5 +1,5 @@
 // Month grid and the events of one day. Pure functions, no UI.
-import { eventDate, eventTime } from '../agenda/agenda';
+import { eventSlot } from '../agenda/agenda';
 import type { EventRecord } from '../domain/types';
 import { addDays } from '../domain/time';
 
@@ -18,17 +18,33 @@ export function monthGrid(year: number, month: number): string[][] {
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 /**
- * The events that show on `date` in the device zone `tz`: not trashed or purged; an all-day event on every day from
- * its start to its end (inclusive), a timed one only on its start day. All-day first, then by start time, then id.
+ * The events that show on each of `days` in the device zone `tz`: not trashed or purged; an all-day event on every
+ * day from its start to its end (inclusive), a timed one only on its start day. Each event's zone work is done once.
+ * Every bucket is sorted all-day first, then by start time, then id.
  */
-export function eventsOnDay(events: EventRecord[], date: string, tz: string): EventRecord[] {
-  return events
-    .filter((e) => {
-      if (e.deleted_at !== null || e.purged_at !== null) return false;
-      if (!e.all_day) return eventDate(e, tz) === date;
+export function eventsByDay(events: EventRecord[], days: string[], tz: string): Map<string, EventRecord[]> {
+  const buckets = new Map<string, { e: EventRecord; key: string }[]>(days.map((d) => [d, []]));
+  for (const e of events) {
+    if (e.deleted_at !== null || e.purged_at !== null) continue;
+    if (e.all_day) {
       const start = e.starts_at.slice(0, 10);
       const end = (e.ends_at ?? e.starts_at).slice(0, 10);
-      return start <= date && date <= (end < start ? start : end);
-    })
-    .sort((a, b) => Number(!a.all_day) - Number(!b.all_day) || cmp(eventTime(a, tz) ?? '', eventTime(b, tz) ?? '') || cmp(a.id, b.id));
+      for (const d of days) if (start <= d && d <= (end < start ? start : end)) buckets.get(d)!.push({ e, key: '' });
+    } else {
+      const { date, time } = eventSlot(e, tz);
+      // The prefix keeps timed events after all-day ones.
+      buckets.get(date)?.push({ e, key: `1${time ?? ''}` });
+    }
+  }
+  const out = new Map<string, EventRecord[]>();
+  for (const [d, list] of buckets) {
+    list.sort((a, b) => cmp(a.key, b.key) || cmp(a.e.id, b.e.id));
+    out.set(d, list.map((x) => x.e));
+  }
+  return out;
+}
+
+/** The events that show on `date` (see eventsByDay). */
+export function eventsOnDay(events: EventRecord[], date: string, tz: string): EventRecord[] {
+  return eventsByDay(events, [date], tz).get(date)!;
 }

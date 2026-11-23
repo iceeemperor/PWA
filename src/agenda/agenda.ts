@@ -47,6 +47,11 @@ export function eventDate(e: EventRecord, tz: string): string {
   return eventWhen(e, isTimeZone(tz) ? tz : 'UTC').date;
 }
 
+/** Date and time of an event in the device zone `tz`, worked out once. Never throws. */
+export function eventSlot(e: EventRecord, tz: string): { date: string; time: string | null } {
+  return eventWhen(e, isTimeZone(tz) ? tz : 'UTC');
+}
+
 /** The wall-clock time of an event in the device zone `tz` (`HH:mm`); null for all-day events. Never throws. */
 export function eventTime(e: EventRecord, tz: string): string | null {
   return eventWhen(e, isTimeZone(tz) ? tz : 'UTC').time;

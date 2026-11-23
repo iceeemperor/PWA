@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { eventTime } from '../agenda/agenda';
 import type { Services } from '../app/services';
-import { eventsOnDay, monthGrid } from '../calendar/month';
+import { eventsByDay, eventsOnDay, monthGrid } from '../calendar/month';
 import { deviceTimeZone, isTimeZone, localDateOf, zonedToInstant } from '../domain/time';
 import type { EventRecord } from '../domain/types';
 import { useLiveRecords } from './useLiveRecords';
@@ -61,12 +61,8 @@ export function CalendarPage({ services, day, onDayChange, onNewEvent, onOpenEve
   const year = Number(day.slice(0, 4));
   const month = Number(day.slice(5, 7));
   const weeks = useMemo(() => monthGrid(year, month), [year, month]);
-  const byDay = useMemo(() => {
-    const m = new Map<string, EventRecord[]>();
-    for (const date of weeks.flat()) m.set(date, eventsOnDay(events, date, tz));
-    return m;
-  }, [weeks, events, tz]);
-  const selected = eventsOnDay(events, day, tz);
+  const byDay = useMemo(() => eventsByDay(events, weeks.flat(), tz), [weeks, events, tz]);
+  const selected = useMemo(() => byDay.get(day) ?? eventsOnDay(events, day, tz), [byDay, day, events, tz]);
 
   return (
     <section className="page calendar-page">
@@ -98,7 +94,9 @@ export function CalendarPage({ services, day, onDayChange, onNewEvent, onOpenEve
               if (date.slice(0, 7) !== day.slice(0, 7)) classes.push('outside');
               if (date === today) classes.push('today');
               if (date === day) classes.push('selected');
-              const name = list.length > 0 ? `${monthDay(date)}，有 ${list.length} 个事项` : monthDay(date);
+              const doneCount = list.filter((e) => e.done).length;
+              const name =
+                list.length > 0 ? `${monthDay(date)}，有 ${list.length} 个事项${doneCount > 0 ? `，其中 ${doneCount} 个已完成` : ""}` : monthDay(date);
               return (
                 <div key={date} role="gridcell" className="day-slot">
                   <button

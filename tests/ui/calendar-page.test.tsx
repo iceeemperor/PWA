@@ -121,7 +121,8 @@ it('an important and done event is struck through on the calendar and in the lis
   const title = await screen.findByText('交报告');
   expect(title).toHaveClass('done-important');
   expect(screen.getByText('普通')).not.toHaveClass('done-important');
-  const dots = within(screen.getByRole('button', { name: '11月23日，有 2 个事项' })).getAllByTestId('event-dot');
+  const cell = screen.getByRole('button', { name: '11月23日，有 2 个事项，其中 2 个已完成' });
+  const dots = within(cell).getAllByTestId('event-dot');
   expect(dots.filter((d) => d.classList.contains('done-important'))).toHaveLength(1);
   expect(dots.filter((d) => d.classList.contains('important'))).toHaveLength(1);
 });
@@ -144,4 +145,35 @@ it('fits 360px: the grid has no horizontal scroll', () => {
   const css = readFileSync('src/ui/styles.css', 'utf8');
   expect(css).toMatch(/\.month-grid\s*\{[^}]*grid-template-columns:\s*repeat\(7,\s*minmax\(0,\s*1fr\)\)/);
   expect(css).toMatch(/\.day-cell\s*\{[^}]*min-height:\s*44px/);
+});
+
+it('the day cell name says how many events are done', async () => {
+  await s.repo.create('events', { title: 'a', starts_at: '2026-11-23', done: true });
+  await s.repo.create('events', { title: 'b', starts_at: '2026-11-23' });
+  renderPage('2026-11-23');
+  expect(await screen.findByRole('button', { name: '11月23日，有 2 个事项，其中 1 个已完成' })).toBeInTheDocument();
+});
+
+it('the done-important dot has a line through it and the important dot uses the brand colour', () => {
+  const css = readFileSync('src/ui/styles.css', 'utf8');
+  expect(css).toMatch(/\.event-dot\.done-important::after\s*\{[^}]*height:/);
+  expect(css).toMatch(/\.event-dot\.important\s*\{[^}]*var\(--brand\)/);
+});
+
+it('12月 → 1月 wraps the year', async () => {
+  renderPage('2026-12-15');
+  await userEvent.click(screen.getByRole('button', { name: '下个月' }));
+  expect(onDayChange).toHaveBeenLastCalledWith('2027-01-15');
+});
+
+it('上个月 from January wraps back to December', async () => {
+  renderPage('2027-01-15');
+  await userEvent.click(screen.getByRole('button', { name: '上个月' }));
+  expect(onDayChange).toHaveBeenLastCalledWith('2026-12-15');
+});
+
+it('clamps to 29 February in a leap year', async () => {
+  renderPage('2028-01-31');
+  await userEvent.click(screen.getByRole('button', { name: '下个月' }));
+  expect(onDayChange).toHaveBeenLastCalledWith('2028-02-29');
 });

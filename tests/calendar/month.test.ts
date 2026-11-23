@@ -1,6 +1,12 @@
-import { describe, expect, it } from 'vitest';
-import { eventsOnDay, monthGrid } from '../../src/calendar/month';
+import { describe, expect, it, vi } from 'vitest';
+import { eventsByDay, eventsOnDay, monthGrid } from '../../src/calendar/month';
 import type { EventRecord } from '../../src/domain/types';
+
+vi.mock('../../src/domain/time', async (orig) => {
+  const actual = await orig<typeof import('../../src/domain/time')>();
+  return { ...actual, zonedToInstant: vi.fn(actual.zonedToInstant) };
+});
+const { zonedToInstant } = await import('../../src/domain/time');
 
 const TZ = 'Asia/Shanghai';
 let seq = 0;
@@ -70,5 +76,36 @@ describe('eventsOnDay', () => {
     expect(eventsOnDay([e], '2026-11-23', 'Not/AZone')).toHaveLength(1);
     const f = timed({ starts_at: '2026-11-23T03:00', tz: 'Asia/Shanghai' }); // 19:00 UTC on 11-22
     expect(eventsOnDay([f], '2026-11-22', 'Not/AZone')).toHaveLength(1);
+  });
+});
+
+describe('eventsByDay', () => {
+  const fixture = () => [
+    event({ id: 'a1', starts_at: '2026-11-28', ends_at: '2026-12-03' }),
+    event({ id: 'a2', starts_at: '2026-11-10' }),
+    timed({ id: 't1', starts_at: '2026-11-10T09:00' }),
+    timed({ id: 't2', starts_at: '2026-11-10T09:00', tz: 'America/New_York' }),
+    timed({ id: 't3', starts_at: '2026-11-30T23:30', tz: 'Asia/Tokyo' }),
+    timed({ id: 't4', starts_at: '2026-11-15T07:00', tz: 'Mars/Base' }),
+    event({ id: 'x1', starts_at: '2026-11-10', deleted_at: '2026-11-11T00:00:00Z' }),
+  ];
+  it('matches eventsOnDay for every day of a month', () => {
+    const events = fixture();
+    const days = monthGrid(2026, 11).flat();
+    const map = eventsByDay(events, days, TZ);
+    for (const d of days) expect(map.get(d)!.map((e) => e.id)).toEqual(eventsOnDay(events, d, TZ).map((e) => e.id));
+    expect(map.get('2026-11-10')!.map((e) => e.id)).toEqual(['a2', 't1', 't2']);
+  });
+  it('an all-day range across a month boundary shows on both sides, within the given days', () => {
+    const e = event({ starts_at: '2026-11-29', ends_at: '2026-12-02' });
+    const map = eventsByDay([e], ['2026-11-28', '2026-11-30', '2026-12-01', '2026-12-03'], TZ);
+    expect([...map].map(([d, l]) => [d, l.length])).toEqual([['2026-11-28', 0], ['2026-11-30', 1], ['2026-12-01', 1], ['2026-12-03', 0]]);
+  });
+  it('works out each timed event\x27s zone once per build', () => {
+    const events = fixture();
+    vi.mocked(zonedToInstant).mockClear();
+    eventsByDay(events, monthGrid(2026, 11).flat(), TZ);
+    const timedCount = events.filter((e) => !e.all_day && !e.deleted_at).length;
+    expect(vi.mocked(zonedToInstant).mock.calls.length).toBeLessThanOrEqual(timedCount);
   });
 });
