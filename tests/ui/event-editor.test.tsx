@@ -153,3 +153,61 @@ it('has no repeat option in stage 2', () => {
   open();
   expect(screen.queryByText(/重复/)).toBeNull();
 });
+
+it('saving only a title change does not overwrite a done change made underneath', async () => {
+  const e = await repo.create('events', { title: 'a', starts_at: '2026-11-24' });
+  open(e);
+  await repo.update('events', e.id, { done: true });
+  const t = screen.getByLabelText('标题');
+  await userEvent.clear(t);
+  await userEvent.type(t, 'b');
+  await save();
+  await waitFor(() => expect(close).toHaveBeenCalled());
+  expect(await repo.list('events')).toMatchObject([{ title: 'b', done: true }]);
+});
+
+it('saving with nothing changed writes nothing and closes', async () => {
+  const e = await repo.create('events', { title: 'a', starts_at: '2026-11-24' });
+  const spy = vi.spyOn(repo, 'update');
+  open(e);
+  await save();
+  await waitFor(() => expect(close).toHaveBeenCalled());
+  expect(spy).not.toHaveBeenCalled();
+});
+
+it('an end date without an end time on a timed event is refused with 请填写结束时间', async () => {
+  open();
+  await userEvent.type(screen.getByLabelText('标题'), '开会');
+  await userEvent.click(screen.getByLabelText('全天'));
+  setValue('结束日期', '2026-11-25');
+  await save();
+  expect(await screen.findByRole('alert')).toHaveTextContent('请填写结束时间');
+  expect(close).not.toHaveBeenCalled();
+  expect(await repo.list('events')).toEqual([]);
+});
+
+it('returns focus to the opener on close and keeps Tab inside the dialog', async () => {
+  const opener = document.createElement('button');
+  document.body.appendChild(opener);
+  opener.focus();
+  const { unmount } = open();
+  const buttons = screen.getAllByRole('button');
+  buttons[buttons.length - 1].focus();
+  await userEvent.tab();
+  expect(screen.getByLabelText('标题')).toHaveFocus();
+  await userEvent.tab({ shift: true });
+  expect(screen.getAllByRole('button').at(-1)).toHaveFocus();
+  unmount();
+  expect(opener).toHaveFocus();
+  opener.remove();
+});
+
+it('two quick submits create exactly one event', async () => {
+  open();
+  await userEvent.type(screen.getByLabelText('标题'), '体检');
+  const form = screen.getByRole('dialog');
+  fireEvent.submit(form);
+  fireEvent.submit(form);
+  await waitFor(() => expect(close).toHaveBeenCalled());
+  expect(await repo.list('events')).toHaveLength(1);
+});

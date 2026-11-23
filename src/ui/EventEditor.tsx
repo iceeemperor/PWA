@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { InvalidRecordError, type Repo } from '../data/repo';
 import { switchAllDay, validateEventFields } from '../data/validate-event-fields';
+import { changedFields } from './changed-fields';
 import { deviceTimeZone } from '../domain/time';
 import type { EventFields, EventRecord } from '../domain/types';
 import { useWriteAttempt, WriteError } from './write-error';
@@ -52,7 +53,18 @@ export function EventEditor({ repo, initial, onClose }: EventEditorProps) {
   const { error, setError, attempt } = useWriteAttempt();
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => titleRef.current?.focus(), []);
+  const formRef = useRef<HTMLFormElement>(null);
+  const opener = useRef<Element | null>(document.activeElement);
+  const inFlight = useRef(false);
+  const before = useRef<EventRecord | null>(existing);
+
+  useEffect(() => {
+    titleRef.current?.focus();
+    const back = opener.current;
+    return () => {
+      if (back instanceof HTMLElement) back.focus();
+    };
+  }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -92,14 +104,38 @@ export function EventEditor({ repo, initial, onClose }: EventEditorProps) {
   }
 
   async function run(fn: () => Promise<unknown>) {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
     const ok = await attempt(fn);
     setBusy(false);
+    inFlight.current = false;
     if (ok) onClose();
+  }
+
+  /** A simple focus loop: Tab from the last control goes to the first, Shift+Tab from the first to the last. */
+  function trapTab(e: ReactKeyboardEvent<HTMLFormElement>) {
+    if (e.key !== 'Tab' || !formRef.current) return;
+    const items = Array.from(formRef.current.querySelectorAll<HTMLElement>('input, textarea, button')).filter((el) => !(el as HTMLInputElement).disabled);
+    if (items.length === 0) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
   }
 
   function save(ev: FormEvent) {
     ev.preventDefault();
+    if (inFlight.current) return;
+    if (!allDay && endDate !== '' && endTime === '') {
+      setError('请填写结束时间');
+      return;
+    }
     const f = fields();
     try {
       validateEventFields(f);
@@ -107,14 +143,21 @@ export function EventEditor({ repo, initial, onClose }: EventEditorProps) {
       setError(validationMessage(e));
       return;
     }
-    void run(() => (existing ? repo.update('events', existing.id, f) : repo.create('events', f)));
+    if (existing && before.current) {
+      const patch = changedFields<EventFields>(before.current, f);
+      if (Object.keys(patch).length === 0) {
+        onClose();
+        return;
+      }
+      void run(() => repo.update('events', existing.id, patch));
+    } else void run(() => repo.create('events', f));
   }
 
   const foreignZone = !allDay && tz !== null && tz !== deviceTz;
 
   return (
     <div className="modal-backdrop">
-      <form className="todo-editor event-editor" role="dialog" aria-modal="true" aria-label="编辑事项" onSubmit={save}>
+      <form className="todo-editor event-editor" role="dialog" aria-modal="true" aria-label="编辑事项" ref={formRef} onSubmit={save} onKeyDown={trapTab}>
         <label className="field">
           标题
           <input ref={titleRef} value={title} onChange={(e) => setTitle(e.target.value)} />
