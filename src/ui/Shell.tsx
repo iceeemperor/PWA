@@ -1,18 +1,25 @@
 import { useState } from 'react';
+import { deviceTimeZone, isTimeZone, localDateOf } from '../domain/time';
+import type { EventRecord } from '../domain/types';
 import type { Services } from '../app/services';
+import { CalendarPage } from './CalendarPage';
+import { EventEditor } from './EventEditor';
 import { ExportReminder } from './ExportReminder';
 import { Settings } from './Settings';
 import { SyncBanner } from './SyncBanner';
 import { TodosPage } from './TodosPage';
 import { useSyncStatus } from './useSyncStatus';
 
-type Tab = 'todos' | 'settings';
+type Tab = 'todos' | 'calendar' | 'settings';
 
-// The calendar arrives in Task 8; until then a 日历 mark on a to-do item has nowhere to go.
-const openDay = (): void => {};
+const today = (): string => {
+  const tz = deviceTimeZone();
+  return localDateOf(new Date(), isTimeZone(tz) ? tz : 'UTC');
+};
 
 const NAV: { tab: Tab; label: string }[] = [
   { tab: 'todos', label: '待办' },
+  { tab: 'calendar', label: '日历' },
   { tab: 'settings', label: '设置' },
 ];
 
@@ -28,6 +35,8 @@ const defaultConfirm = (msg: string) => window.confirm(msg);
 export function Shell({ services, confirmFn = defaultConfirm }: ShellProps) {
   const { repo, engine, auth } = services;
   const [tab, setTab] = useState<Tab>('todos');
+  const [day, setDay] = useState(today);
+  const [editing, setEditing] = useState<EventRecord | { date: string } | null>(null);
   const { status, loaded } = useSyncStatus(repo, engine);
 
   async function signOut() {
@@ -65,7 +74,20 @@ export function Shell({ services, confirmFn = defaultConfirm }: ShellProps) {
         </header>
         <main className="content">
           <ExportReminder services={services} onOpenSettings={tab === 'settings' ? undefined : () => setTab('settings')} />
-          {tab === 'todos' ? <TodosPage services={services} onOpenDay={openDay} /> : <Settings services={services} />}
+          {tab === 'todos' && (
+            <TodosPage
+              services={services}
+              onOpenDay={(date) => {
+                setDay(date);
+                setTab('calendar');
+              }}
+            />
+          )}
+          {tab === 'calendar' && (
+            <CalendarPage services={services} day={day} onDayChange={setDay} onNewEvent={(date) => setEditing({ date })} onOpenEvent={setEditing} />
+          )}
+          {tab === 'settings' && <Settings services={services} />}
+          {editing && <EventEditor key={'id' in editing ? editing.id : editing.date} repo={repo} initial={editing} onClose={() => setEditing(null)} />}
         </main>
       </div>
     </div>

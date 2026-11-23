@@ -172,3 +172,38 @@ describe('App: edges', () => {
     expect(await screen.findByRole('button', { name: '导出完整备份' })).toBeInTheDocument();
   });
 });
+
+describe('Shell: calendar navigation (Task 8)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime('2026-11-23T04:00:00Z');
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('the navigation has 待办, 日历 and 设置; the calendar mark on an upcoming item opens that day', async () => {
+    await repo.create('events', { title: '体检', starts_at: '2026-11-24', important: true });
+    renderShell();
+    const nav = screen.getByRole('navigation', { name: '主导航' });
+    expect(Array.from(nav.querySelectorAll('.nav-item')).map((b) => b.textContent)).toEqual(['待办', '日历', '设置']);
+    await userEvent.click(await screen.findByRole('button', { name: /日历：打开/ }));
+    expect(await screen.findByRole('heading', { name: '11月24日' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '新建事项' })).toBeInTheDocument();
+  });
+
+  it('新建事项 and 取消 open and close the editor over the calendar', async () => {
+    renderShell();
+    await userEvent.click(screen.getByRole('button', { name: '日历' }));
+    await userEvent.click(screen.getByRole('button', { name: '新建事项' }));
+    expect(screen.getByRole('dialog', { name: '编辑事项' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '取消' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('opening an event from the day list edits it', async () => {
+    await repo.create('events', { title: '体检', starts_at: '2026-11-23' });
+    renderShell();
+    await userEvent.click(screen.getByRole('button', { name: '日历' }));
+    await userEvent.click(await screen.findByRole('button', { name: /体检/ }));
+    expect(screen.getByLabelText('标题')).toHaveValue('体检');
+  });
+});

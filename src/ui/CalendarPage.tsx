@@ -2,9 +2,10 @@ import { useMemo } from 'react';
 import { eventTime } from '../agenda/agenda';
 import type { Services } from '../app/services';
 import { eventsByDay, eventsOnDay, monthGrid } from '../calendar/month';
-import { deviceTimeZone, isTimeZone, localDateOf, zonedToInstant } from '../domain/time';
+import { deviceTimeZone, isTimeZone, localDateOf } from '../domain/time';
 import type { EventRecord } from '../domain/types';
 import { useLiveRecords } from './useLiveRecords';
+import { zoneLabel } from './zone-label';
 
 export interface CalendarPageProps {
   services: Services;
@@ -36,19 +37,6 @@ function shiftMonth(day: string, delta: number): string {
   probe.setUTCFullYear(year, month, 0); // day 0 of the next month: the last day of this one
   const d = Math.min(Number(day.slice(8, 10)), probe.getUTCDate());
   return `${prefix}${String(d).padStart(2, '0')}`;
-}
-
-/** A short zone name (GMT-5), or the IANA id when Intl cannot name the zone. */
-function zoneLabel(e: EventRecord): string {
-  const tz = e.tz as string;
-  if (!isTimeZone(tz)) return tz;
-  try {
-    const at = zonedToInstant(e.starts_at, tz);
-    const part = new Intl.DateTimeFormat('zh-CN', { timeZone: tz, timeZoneName: 'short' }).formatToParts(at).find((p) => p.type === 'timeZoneName');
-    return part?.value ?? tz;
-  } catch {
-    return tz;
-  }
 }
 
 const isDoneImportant = (e: EventRecord): boolean => e.important && e.done;
@@ -144,7 +132,7 @@ export function CalendarPage({ services, day, onDayChange, onNewEvent, onOpenEve
                 <button type="button" className="day-event-btn" onClick={() => onOpenEvent(e)}>
                   <span className="event-time">
                     {e.all_day ? '全天' : (time ?? '')}
-                    {foreign && <span className="event-tz">{zoneLabel(e)}</span>}
+                    {foreign && <span className="event-tz">{zoneLabel(e.tz as string, e.starts_at)}</span>}
                   </span>
                   <span className={`event-title${e.done ? ' done' : ''}${isDoneImportant(e) ? ' done-important' : ''}`}>{e.title}</span>
                 </button>
