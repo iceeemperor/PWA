@@ -8,6 +8,7 @@ import { saveFile } from '../backup/save-file';
 import type { ImportSummary, OpKind, QueuedOp, TableName } from '../domain/types';
 import { CloudError, type CloudErrorKind } from '../sync/cloud';
 import { notifyExportRecorded } from './ExportReminder';
+import { TrashSection } from './TrashSection';
 
 type Scope = 'all' | 'journal';
 type Busy = null | 'json' | 'markdown' | 'import';
@@ -239,6 +240,8 @@ export function Settings({ services }: SettingsProps) {
         {busy === 'import' && <p className="muted">正在导入…</p>}
         {importView && <ImportResultView view={importView} />}
       </div>
+
+      <TrashSection services={services} />
 
       <div className="card">
         <h3>同步失败</h3>
