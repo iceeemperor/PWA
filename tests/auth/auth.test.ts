@@ -198,12 +198,21 @@ describe('createSupabaseAuth: offline start (F1)', () => {
   });
 
   it('boot does not wait for a slow refresh: ready resolves after the bound with the remembered owner', async () => {
-    const f = offlineClient(() => new Promise(() => {}));
-    const a = createSupabaseAuth(f.client, remembered('u1'));
-    const t0 = Date.now();
-    await a.ready;
-    expect(Date.now() - t0).toBeLessThan(1000);
-    expect(a.getUserId()).toBe('u1');
+    vi.useFakeTimers();
+    try {
+      const f = offlineClient(() => new Promise(() => {}));
+      const a = createSupabaseAuth(f.client, remembered('u1'));
+      let done = false;
+      void a.ready.then(() => { done = true; });
+      await vi.advanceTimersByTimeAsync(49);
+      expect(done).toBe(false); // still waiting before the bound
+      await vi.advanceTimersByTimeAsync(1);
+      await a.ready;
+      expect(done).toBe(true); // resolved at the bound, though getSession never settles
+      expect(a.getUserId()).toBe('u1');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('an auth rejection at start is not offline: signed out, and reported as expired for the owner', async () => {
