@@ -22,6 +22,8 @@ export function WeatherSettings({ db, fetchFn }: WeatherSettingsProps) {
   const [searching, setSearching] = useState(false);
   const guard = useRef(false);
   const live = useRef(true);
+  /** Bumped when the query is edited, so a search still in flight for the old text shows nothing. */
+  const queryGen = useRef(0);
 
   useEffect(() => {
     live.current = true;
@@ -39,6 +41,7 @@ export function WeatherSettings({ db, fetchFn }: WeatherSettingsProps) {
     const name = query.trim();
     if (!name || guard.current) return;
     guard.current = true;
+    const gen = queryGen.current;
     setSearching(true);
     setMessage(null);
     setResults([]);
@@ -53,6 +56,7 @@ export function WeatherSettings({ db, fetchFn }: WeatherSettingsProps) {
     }
     if (!live.current) return;
     setSearching(false);
+    if (gen !== queryGen.current) return;
     if (failed) setMessage('搜索失败，请稍后再试');
     else if (found.length === 0) setMessage('没有找到这个地方');
     else setResults(found);
@@ -84,6 +88,13 @@ export function WeatherSettings({ db, fetchFn }: WeatherSettingsProps) {
     }
   }
 
+  function onQueryChange(value: string) {
+    queryGen.current += 1;
+    setQuery(value);
+    setResults([]);
+    setMessage(null);
+  }
+
   function onSubmit(e: FormEvent) {
     e.preventDefault();
     void search();
@@ -104,7 +115,7 @@ export function WeatherSettings({ db, fetchFn }: WeatherSettingsProps) {
       <form className="weather-search" onSubmit={onSubmit}>
         <label className="field">
           城市
-          <input type="text" value={query} onChange={(e) => setQuery(e.target.value)} autoComplete="off" />
+          <input type="text" value={query} onChange={(e) => onQueryChange(e.target.value)} autoComplete="off" />
         </label>
         <button type="submit" disabled={searching}>
           {searching ? '搜索中…' : '搜索'}

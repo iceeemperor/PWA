@@ -73,6 +73,40 @@ describe('WeatherSettings', () => {
     expect(screen.queryByText('搜索失败，请稍后再试')).toBeNull();
   });
 
+  it('editing the query clears the old results and message', async () => {
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(json({ results: [shanghai] }))
+      .mockResolvedValueOnce(json({}));
+    const user = userEvent.setup();
+    render(<WeatherSettings db={services.db} fetchFn={fetchFn} />);
+    const input = screen.getByLabelText('城市');
+    await user.type(input, '上海{Enter}');
+    await screen.findByRole('button', { name: '上海，上海市，中国' });
+    await user.type(input, 'x');
+    expect(screen.queryByRole('button', { name: '上海，上海市，中国' })).toBeNull();
+    await user.clear(input);
+    await user.type(input, 'nowhere{Enter}');
+    expect(await screen.findByText('没有找到这个地方')).toBeTruthy();
+    await user.type(input, 'x');
+    expect(screen.queryByText('没有找到这个地方')).toBeNull();
+  });
+
+  it('results of a search whose query was edited meanwhile are not shown', async () => {
+    let release!: (r: Response) => void;
+    const fetchFn = vi.fn<typeof fetch>(() => new Promise<Response>((r) => (release = r)));
+    const user = userEvent.setup();
+    render(<WeatherSettings db={services.db} fetchFn={fetchFn} />);
+    const input = screen.getByLabelText('城市');
+    await user.type(input, '上海{Enter}');
+    await user.type(input, '浦东');
+    release(json({ results: [shanghai] }));
+    // The search ends (the button is usable again) without listing the old results.
+    expect(await screen.findByRole('button', { name: '搜索' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '上海，上海市，中国' })).toBeNull();
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
   it('清除 removes the city and its cache', async () => {
     const city = { name: '上海', region: null, country: null, latitude: 1, longitude: 2 };
     await setCity(services.db, city);
