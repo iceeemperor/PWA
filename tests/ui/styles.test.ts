@@ -54,3 +54,12 @@ it('the weather line wraps instead of scrolling, and its credit link is a 44px t
   expect(credit).toMatch(/display:\s*inline-block/);
   expect(px(credit, 'min-height')).toBeGreaterThanOrEqual(44);
 });
+
+it('long city names wrap in the weather settings instead of widening the card', () => {
+  const css = readFileSync('src/ui/styles.css', 'utf8');
+  const current = ruleBody(css, '.weather-settings .weather-current span');
+  expect(current).toMatch(/overflow-wrap:\s*anywhere/);
+  expect(current).toMatch(/min-width:\s*0/);
+  const result = ruleBody(css, '.weather-settings .weather-results button');
+  expect(result).toMatch(/overflow-wrap:\s*anywhere/);
+});

@@ -1081,6 +1081,12 @@ button.restore {
   justify-content: space-between;
 }
 
+/* A long place name wraps instead of widening the card past a 360px screen. */
+.weather-settings .weather-current span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .weather-settings .weather-search .field {
   flex: 1 1 140px;
   min-width: 0;
@@ -1107,5 +1113,5 @@ button.restore {
 .weather-settings .weather-results button {
   width: 100%;
   text-align: left;
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
