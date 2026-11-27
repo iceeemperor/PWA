@@ -41,6 +41,21 @@ describe('fetchForecast', () => {
     }));
     await expect(fetchForecast(SH, { fetchFn: hang as unknown as typeof fetch, timeoutMs: 10 })).rejects.toBeInstanceOf(WeatherError);
   });
+
+  it('clears the timeout timer after a successful and after a failed request', async () => {
+    vi.useFakeTimers();
+    try {
+      const body = { timezone: 'UTC', daily: { time: ['2026-11-27'], weather_code: [0] } };
+      await fetchForecast(SH, { fetchFn: vi.fn().mockResolvedValue(ok(body)) });
+      expect(vi.getTimerCount()).toBe(0);
+      await expect(fetchForecast(SH, { fetchFn: vi.fn().mockRejectedValue(new TypeError('fail')) })).rejects.toBeInstanceOf(WeatherError);
+      expect(vi.getTimerCount()).toBe(0);
+      await expect(fetchForecast(SH, { fetchFn: vi.fn().mockResolvedValue(new Response('x', { status: 500 })) })).rejects.toBeInstanceOf(WeatherError);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('searchCities', () => {
