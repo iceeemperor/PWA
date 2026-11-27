@@ -10,6 +10,7 @@ import { CloudError, type CloudErrorKind } from '../sync/cloud';
 import type { SyncReport } from '../sync/engine';
 import { notifyExportRecorded } from './ExportReminder';
 import { TrashSection } from './TrashSection';
+import { WeatherSettings } from './WeatherSettings';
 
 type Scope = 'all' | 'journal';
 type Busy = null | 'json' | 'markdown' | 'import';
@@ -83,9 +84,11 @@ async function syncBounded(engine: Services['engine'], ms: number): Promise<void
 
 export interface SettingsProps {
   services: Services;
+  /** Only tests pass this, to stub the city search. */
+  weatherFetchFn?: typeof fetch;
 }
 
-export function Settings({ services }: SettingsProps) {
+export function Settings({ services, weatherFetchFn }: SettingsProps) {
   const { db, repo, cloud, engine } = services;
   const [busy, setBusy] = useState<Busy>(null);
   const [scope, setScope] = useState<Scope>('all');
@@ -253,6 +256,8 @@ export function Settings({ services }: SettingsProps) {
           </p>
         )}
       </div>
+
+      <WeatherSettings db={db} fetchFn={weatherFetchFn} />
 
       <div className="card">
         <h3>导出</h3>

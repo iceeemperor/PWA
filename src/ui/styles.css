@@ -1065,3 +1065,47 @@ button.restore {
 .settings button.sync-now {
   min-height: 44px;
 }
+
+/* Settings: weather */
+.weather-settings .weather-current,
+.weather-settings .weather-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  width: 100%;
+}
+
+.weather-settings .weather-current {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.weather-settings .weather-search .field {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+
+.weather-settings .weather-search input {
+  width: 100%;
+  min-height: 44px;
+  box-sizing: border-box;
+}
+
+.weather-settings button {
+  min-height: 44px;
+}
+
+.weather-settings .weather-results {
+  list-style: none;
+  padding-left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.weather-settings .weather-results button {
+  width: 100%;
+  text-align: left;
+  word-break: break-word;
+}
