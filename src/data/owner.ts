@@ -13,7 +13,7 @@ export interface OwnerStore {
   signedInOwner(): Promise<string | null>;
   /**
    * A user was signed in. The owner, or no owner yet: it becomes the owner (signed in). Another account: with an
-   * empty queue the local copy is wiped (records, queue, cursor, export date; db_id kept) and it becomes the owner;
+   * empty queue the local copy is wiped (records, queue, cursor, export date, weather city and cache; db_id kept) and it becomes the owner;
    * with ops still queued (pending or failed) it is refused and nothing changes.
    */
   adopt(userId: string): Promise<AdoptResult>;
@@ -45,6 +45,9 @@ export function createOwnerStore(db: LocalDb): OwnerStore {
         await tx.objectStore('queue').clear();
         await meta.put(0, 'cursor');
         await meta.delete('last_export_at');
+        // Plan decision 6: the weather city is personal, so it goes with the account (same keys as weather/store.ts).
+        await meta.put(null, 'weather_city');
+        await meta.put(null, 'weather_cache');
       }
       await meta.put(userId, OWNER_USER_ID);
       await meta.put(true, OWNER_SIGNED_IN);

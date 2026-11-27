@@ -87,13 +87,15 @@ describe('account switch on one browser (F3)', () => {
     expect(await db.getMeta(OWNER_USER_ID)).toBe(A);
   });
 
-  it('another user with an empty queue: local records (todos and events), cursor and export date are wiped, db_id kept, new owner set', async () => {
+  it('another user with an empty queue: local records (todos and events), cursor, export date and weather city/cache are wiped, db_id kept, new owner set', async () => {
     const { db, inner, auth } = await asOwnerA();
     // A's synced record and cursor (nothing queued).
     await db.raw.put('todos', { id: 'r1', user_id: A, title: 'A private', rev: 5, deleted_at: null, purged_at: null });
     await db.raw.put('events', { id: 'e1', user_id: A, title: 'A meeting', rev: 6, deleted_at: null, purged_at: null });
     await db.setMeta('cursor', 5);
     await db.setMeta('last_export_at', '2026-11-01T00:00:00.000Z');
+    await db.setMeta('weather_city', { name: '上海', region: null, country: '中国', latitude: 31.22, longitude: 121.46 });
+    await db.setMeta('weather_cache', { city: { name: '上海' }, fetchedAt: '2026-11-01T00:00:00.000Z', forecast: { timezone: 'UTC', days: [] } });
     const dbId = await db.getMeta('db_id');
     await auth.signOut();
     inner.setSignInUser(B);
@@ -104,6 +106,8 @@ describe('account switch on one browser (F3)', () => {
     expect(await db.raw.getAll('queue')).toEqual([]);
     expect(await db.getMeta('cursor')).toBe(0);
     expect(await db.getMeta('last_export_at')).toBeUndefined();
+    expect(await db.getMeta('weather_city')).toBeNull();
+    expect(await db.getMeta('weather_cache')).toBeNull();
     expect(await db.getMeta('db_id')).toBe(dbId);
     expect(await db.getMeta(OWNER_USER_ID)).toBe(B);
     expect(await db.getMeta(OWNER_SIGNED_IN)).toBe(true);
