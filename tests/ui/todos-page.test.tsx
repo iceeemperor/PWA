@@ -10,6 +10,7 @@ import type { CloudClient } from '../../src/sync/cloud';
 import { TodosPage } from '../../src/ui/TodosPage';
 import { FAKE_USER_ID } from '../helpers/fake-auth';
 import { createTestServices, offlineCloud } from '../helpers/ui-services';
+import { saveCache, setCity } from '../../src/weather/store';
 
 // 2026-11-23 12:00 in Asia/Shanghai (the device zone fixed in vitest.config.ts).
 const NOW = '2026-11-23T04:00:00Z';
@@ -485,4 +486,49 @@ it('shows a record a real sync run pulls from another device', async () => {
   expect(await screen.findByText('近期没有待办')).toBeInTheDocument();
   expect(await s.engine.sync()).toMatchObject({ outcome: 'ok', pulled: 1 });
   expect(await screen.findByText('pulled from phone')).toBeInTheDocument();
+});
+
+describe('weather line', () => {
+  const SH = { name: '上海', region: '上海市', country: '中国', latitude: 31.22, longitude: 121.46 };
+
+  it('the upcoming tab shows the weather line above the list', async () => {
+    await setCity(s.db, SH);
+    // Fetched one hour before NOW (2026-11-23 12:00 Shanghai): fresh, so no request.
+    await saveCache(s.db, {
+      city: SH,
+      fetchedAt: '2026-11-23T03:00:00.000Z',
+      forecast: { timezone: 'Asia/Shanghai', days: [{ date: '2026-11-23', code: 0 }, { date: '2026-11-24', code: 0 }, { date: '2026-11-25', code: 0 }] },
+    });
+    await s.repo.create('todos', { title: '买菜' });
+    const fetchFn = vi.fn<typeof fetch>();
+    render(<TodosPage services={s} onOpenDay={onOpenDay} weatherFetchFn={fetchFn} />);
+    const line = await screen.findByText('上海：未来三天都是晴');
+    const form = screen.getByPlaceholderText('新待办').closest('form')!;
+    const row = await rowOf('买菜');
+    // The line comes first in the tab: above the add form and the list.
+    expect(line.compareDocumentPosition(form) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(line.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Open-Meteo' })).toBeInTheDocument();
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it('without a city the tab shows the hint and the goals tab has no weather line', async () => {
+    const fetchFn = vi.fn<typeof fetch>();
+    render(<TodosPage services={s} onOpenDay={onOpenDay} weatherFetchFn={fetchFn} />);
+    expect(await screen.findByText('在设置里选一个城市即可显示天气')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('tab', { name: '目标' }));
+    expect(screen.queryByText('在设置里选一个城市即可显示天气')).toBeNull();
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it('coming back to 近期 re-reads a city chosen meanwhile', async () => {
+    const fetchFn = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ timezone: 'Asia/Shanghai', daily: { time: ['2026-11-23'], weather_code: [61] } })));
+    render(<TodosPage services={s} onOpenDay={onOpenDay} weatherFetchFn={fetchFn} />);
+    expect(await screen.findByText('在设置里选一个城市即可显示天气')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('tab', { name: '目标' }));
+    await setCity(s.db, SH);
+    await userEvent.click(screen.getByRole('tab', { name: '近期' }));
+    expect(await screen.findByText('上海：今天有雨')).toBeInTheDocument();
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
 });

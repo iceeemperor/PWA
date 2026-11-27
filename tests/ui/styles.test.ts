@@ -43,3 +43,14 @@ it('gives the to-do page 44px touch targets', () => {
   const page = css.slice(css.indexOf('/* To-do page'), css.indexOf('/* Export reminder'));
   for (const m of page.matchAll(/min-height:\s*(\d+)px/g)) expect(Number(m[1])).toBeGreaterThanOrEqual(44);
 });
+
+it('the weather line wraps instead of scrolling, and its credit link is a 44px tap target', () => {
+  const css = readFileSync('src/ui/styles.css', 'utf8');
+  const line = ruleBody(css, '.weather-line');
+  expect(line).toMatch(/color:\s*var\(--muted\)/);
+  expect(line).not.toMatch(/white-space:\s*nowrap/);
+  expect(line).not.toMatch(/border|box-shadow/);
+  const credit = ruleBody(css, '.weather-credit');
+  expect(credit).toMatch(/display:\s*inline-block/);
+  expect(px(credit, 'min-height')).toBeGreaterThanOrEqual(44);
+});

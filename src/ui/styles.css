@@ -321,6 +321,27 @@ textarea:focus-visible {
   font-weight: 600;
 }
 
+/* The weather hint at the top of 近期: one muted line that may wrap; not a button, no border or shadow. */
+.weather-line {
+  margin: 0 0 8px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+/* The Open-Meteo credit: small, but a 44px-tall tap area. */
+.weather-credit {
+  display: inline-block;
+  min-height: 44px;
+  line-height: 44px;
+  padding: 0 4px;
+  font-size: 13px;
+  color: var(--muted);
+  vertical-align: middle;
+}
+
 .quick-add {
   display: flex;
   flex-wrap: wrap;

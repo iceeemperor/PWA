@@ -6,12 +6,15 @@ import type { TodoRecord } from '../domain/types';
 import { GoalCard } from './GoalCard';
 import { PRIORITIES, PRIORITY_LABELS, TodoEditor } from './TodoEditor';
 import { useLiveRecords } from './useLiveRecords';
+import { WeatherLine } from './WeatherLine';
 import { useWriteAttempt, WriteError } from './write-error';
 
 export interface TodosPageProps {
   services: Services;
   /** Opens the calendar on a day (`YYYY-MM-DD`): the 日历 mark of an item that comes from the calendar. */
   onOpenDay: (date: string) => void;
+  /** Tests only: the fetch the weather line uses. */
+  weatherFetchFn?: typeof fetch;
 }
 
 type Tab = 'upcoming' | 'goals';
@@ -41,7 +44,7 @@ function deviceZone(): string {
 }
 
 /** The to-do area: 近期 (todos and important calendar items, merged) and 目标 (goals). */
-export function TodosPage({ services, onOpenDay }: TodosPageProps) {
+export function TodosPage({ services, onOpenDay, weatherFetchFn }: TodosPageProps) {
   const [tab, setTab] = useState<Tab>('upcoming');
   const tabRefs = useRef<Record<Tab, HTMLButtonElement | null>>({ upcoming: null, goals: null });
 
@@ -77,13 +80,13 @@ export function TodosPage({ services, onOpenDay }: TodosPageProps) {
         ))}
       </div>
       <div role="tabpanel" id={`todos-panel-${tab}`} aria-labelledby={`todos-tab-${tab}`}>
-        {tab === 'upcoming' ? <Upcoming services={services} onOpenDay={onOpenDay} /> : <Goals services={services} />}
+        {tab === 'upcoming' ? <Upcoming services={services} onOpenDay={onOpenDay} weatherFetchFn={weatherFetchFn} /> : <Goals services={services} />}
       </div>
     </section>
   );
 }
 
-function Upcoming({ services, onOpenDay }: TodosPageProps) {
+function Upcoming({ services, onOpenDay, weatherFetchFn }: TodosPageProps) {
   const { repo, engine, db } = services;
   const todos = useLiveRecords(repo, engine, 'todos');
   const events = useLiveRecords(repo, engine, 'events');
@@ -170,6 +173,7 @@ function Upcoming({ services, onOpenDay }: TodosPageProps) {
 
   return (
     <div className="upcoming">
+      <WeatherLine db={db} fetchFn={weatherFetchFn} />
       <form className="quick-add" onSubmit={add}>
         <input className="quick-title" placeholder="新待办" aria-label="新待办" value={title} onChange={(e) => setTitle(e.target.value)} />
         <div className="quick-options">
