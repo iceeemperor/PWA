@@ -14,7 +14,26 @@ export interface UseWeatherOptions {
   doc?: Document;
 }
 
+/** What one pass of `loadWeather` yields: a view, or `error` when local storage could not be read (keep what is shown). */
+export type WeatherLoad = WeatherView | { kind: 'error' };
+
 const HIDDEN: WeatherView = { kind: 'hidden' };
+
+/** After a failed request, no new request for this long. In memory only: 近期 remounts on every tab switch. */
+export const WEATHER_BACKOFF_MS = 10 * 60 * 1000;
+let lastFailAt: number | null = null;
+
+/** Tests only: forget the last failed request. */
+export function resetWeatherBackoff(): void {
+  lastFailAt = null;
+}
+
+function inBackoff(nowMs: number): boolean {
+  if (lastFailAt === null) return false;
+  const since = nowMs - lastFailAt;
+  // A clock that went back ends the wait rather than stretching it.
+  return since >= 0 && since < WEATHER_BACKOFF_MS;
+}
 
 /** What a failure is, without any data: the message of our own errors, else just the error's name. */
 function describe(e: unknown): string {
@@ -58,10 +77,16 @@ interface LoadOptions {
   fetchFn: typeof fetch;
   now: () => Date;
   signal: AbortSignal;
+  /** Called before the request with the old result (cache under a day old), so it shows while the request runs. */
+  onInterim?: (view: WeatherView) => void;
 }
 
-/** One pass of the flow: city, cache, maybe one request. Never throws. */
-export async function loadWeather(db: LocalDb, o: LoadOptions): Promise<WeatherView> {
+/**
+ * One pass of the flow: city, cache, maybe one request. Never throws. A cache under 3 h is shown as is; an older one
+ * under a day is handed to `onInterim` (marked with its time) before the request and is the result if the request fails.
+ * Within `WEATHER_BACKOFF_MS` of a failed request no request is made.
+ */
+export async function loadWeather(db: LocalDb, o: LoadOptions): Promise<WeatherLoad> {
   try {
     const city = await getCity(db);
     if (!city) return { kind: 'no_city' };
@@ -72,18 +97,23 @@ export async function loadWeather(db: LocalDb, o: LoadOptions): Promise<WeatherV
     // A fetchedAt in the future (the clock went back) is not fresh and is not shown as an old result.
     const age = cache ? now.getTime() - Date.parse(cache.fetchedAt) : Number.NaN;
     if (cache && age >= 0 && age < WEATHER_TTL_MS) return viewOf(city, cache.forecast, now, null);
+    const old = cache && age >= 0 && age < WEATHER_MAX_AGE_MS ? cache : null;
+    const oldView = (): WeatherView =>
+      old ? viewOf(city, old.forecast, o.now(), localTimeOf(new Date(old.fetchedAt), deviceZone())) : HIDDEN;
+
+    if (inBackoff(now.getTime())) return oldView();
+    if (old) o.onInterim?.(oldView());
 
     let forecast: Forecast;
     try {
       forecast = await fetchForecast(city, { fetchFn: abortable(o.fetchFn, o.signal) });
     } catch (e) {
       if (o.signal.aborted) return HIDDEN;
+      lastFailAt = o.now().getTime();
       console.error('Weather request failed:', describe(e));
-      if (cache && age >= 0 && age < WEATHER_MAX_AGE_MS) {
-        return viewOf(city, cache.forecast, o.now(), localTimeOf(new Date(cache.fetchedAt), deviceZone()));
-      }
-      return HIDDEN;
+      return oldView();
     }
+    lastFailAt = null;
     const fetchedAt = o.now();
     try {
       await saveCache(db, { city, fetchedAt: fetchedAt.toISOString(), forecast });
@@ -94,14 +124,16 @@ export async function loadWeather(db: LocalDb, o: LoadOptions): Promise<WeatherV
     return viewOf(city, forecast, fetchedAt, null);
   } catch (e) {
     console.error('Could not load the weather:', describe(e));
-    return HIDDEN;
+    return { kind: 'error' };
   }
 }
 
 /**
  * The weather hint for the 近期 tab. Runs on mount and whenever the document becomes visible again (the cache keeps that
- * to one request per 3 hours). Overlapping triggers share one run; after unmount the request is aborted and nothing is
- * set. A city changed in Settings is picked up when the 近期 tab mounts again.
+ * to one request per 3 hours, the backoff to none for 10 minutes after a failure). An old result shows while the
+ * request runs and is swapped when it succeeds. A storage read error keeps what is shown (hidden on the first load).
+ * Overlapping triggers share one run; after unmount the request is aborted and nothing is set. A city changed in
+ * Settings is picked up when the 近期 tab mounts again.
  */
 export function useWeather(db: LocalDb, o: UseWeatherOptions = {}): WeatherView {
   const [view, setView] = useState<WeatherView>(HIDDEN);
@@ -121,9 +153,12 @@ export function useWeather(db: LocalDb, o: UseWeatherOptions = {}): WeatherView 
         fetchFn: fetchFn ?? ((input, init) => fetch(input, init)),
         now: now ?? (() => new Date()),
         signal: controller.signal,
+        onInterim: (v) => {
+          if (live) setView(v);
+        },
       })
         .then((v) => {
-          if (live) setView(v);
+          if (live && v.kind !== 'error') setView(v);
         })
         .finally(() => {
           if (inFlight.current === p) inFlight.current = null;
