@@ -112,13 +112,16 @@ describe('App: login and session (brief)', () => {
       await gate;
       return realFailed();
     });
-    await repo.create('todos', { title: 'fresh' });
-    expect(screen.getByText('已同步')).toBeInTheDocument();
-    await userEvent.click(screen.getByText('退出登录'));
-    expect(confirmFn).toHaveBeenCalledTimes(1);
-    expect(confirmFn).toHaveBeenCalledWith(expect.stringContaining('还有 1 项'));
-    expect(auth.getUserId()).not.toBeNull();
-    release();
+    try {
+      await repo.create('todos', { title: 'fresh' });
+      expect(screen.getByText('已同步')).toBeInTheDocument();
+      await userEvent.click(screen.getByText('退出登录'));
+      expect(confirmFn).toHaveBeenCalledTimes(1);
+      expect(confirmFn).toHaveBeenCalledWith(expect.stringContaining('还有 1 项'));
+      expect(auth.getUserId()).not.toBeNull();
+    } finally {
+      release();
+    }
   });
 
   it('sign-out still asks (without a count) when the pending count cannot be read', async () => {
@@ -129,6 +132,43 @@ describe('App: login and session (brief)', () => {
     await userEvent.click(screen.getByText('退出登录'));
     expect(confirmFn).toHaveBeenCalledTimes(1);
     expect(confirmFn).toHaveBeenCalledWith(expect.stringContaining('可能还有'));
+    expect(auth.getUserId()).not.toBeNull();
+  });
+
+  it('a double tap on sign-out while the count is being read asks only once', async () => {
+    await repo.create('todos', { title: 'x' });
+    const confirmFn = vi.fn(() => false);
+    renderShell({ confirmFn });
+    await screen.findByText(/未同步 1 项/);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const real = repo.pendingCount.bind(repo);
+    const spy = vi.spyOn(repo, 'pendingCount').mockImplementation(async () => {
+      await gate;
+      return real();
+    });
+    try {
+      const btn = screen.getByRole('button', { name: '退出登录' });
+      await userEvent.click(btn);
+      await userEvent.click(btn);
+      expect(btn).toBeDisabled();
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      release();
+    }
+    await waitFor(() => expect(confirmFn).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByRole('button', { name: '退出登录' })).toBeEnabled());
+  });
+
+  it('after cancelling the sign-out confirm the button works again', async () => {
+    await repo.create('todos', { title: 'x' });
+    const confirmFn = vi.fn(() => false);
+    renderShell({ confirmFn });
+    await screen.findByText(/未同步 1 项/);
+    await userEvent.click(screen.getByRole('button', { name: '退出登录' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '退出登录' })).toBeEnabled());
+    await userEvent.click(screen.getByRole('button', { name: '退出登录' }));
+    expect(confirmFn).toHaveBeenCalledTimes(2);
     expect(auth.getUserId()).not.toBeNull();
   });
 

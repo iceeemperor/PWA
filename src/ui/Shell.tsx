@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { deviceTimeZone, isTimeZone, localDateOf } from '../domain/time';
 import type { EventRecord } from '../domain/types';
 import type { Services } from '../app/services';
@@ -38,23 +38,34 @@ export function Shell({ services, confirmFn = defaultConfirm }: ShellProps) {
   const [day, setDay] = useState(today);
   const [editing, setEditing] = useState<EventRecord | { date: string } | null>(null);
   const { status } = useSyncStatus(repo, engine);
+  const signingOut = useRef(false);
+  const [signOutBusy, setSignOutBusy] = useState(false);
 
   async function signOut() {
-    // Read the queue at click time: the banner's cached count can lag a write made a moment ago.
-    // If the read fails the count is unknown, so ask anyway with a count-free message
-    // (a stale last-known count could say 0 and mislead).
-    let pending: number | null;
+    // A second tap while one is in flight (slow read, open confirm) is ignored.
+    if (signingOut.current) return;
+    signingOut.current = true;
+    setSignOutBusy(true);
     try {
-      pending = await repo.pendingCount();
-    } catch {
-      pending = null;
+      // Read the queue at click time: the banner's cached count can lag a write made a moment ago.
+      // If the read fails the count is unknown, so ask anyway with a count-free message
+      // (a stale last-known count could say 0 and mislead).
+      let pending: number | null;
+      try {
+        pending = await repo.pendingCount();
+      } catch {
+        pending = null;
+      }
+      if (pending === null || pending > 0) {
+        const what = pending === null ? '可能还有改动' : `还有 ${pending} 项改动`;
+        const ok = confirmFn(`${what}没有上传到云端。退出后它们仍保存在本机，下次登录会继续上传。确定退出登录？`);
+        if (!ok) return;
+      }
+      await auth.signOut();
+    } finally {
+      signingOut.current = false;
+      setSignOutBusy(false);
     }
-    if (pending === null || pending > 0) {
-      const what = pending === null ? '可能还有改动' : `还有 ${pending} 项改动`;
-      const ok = confirmFn(`${what}没有上传到云端。退出后它们仍保存在本机，下次登录会继续上传。确定退出登录？`);
-      if (!ok) return;
-    }
-    await auth.signOut();
   }
 
   return (
@@ -76,7 +87,7 @@ export function Shell({ services, confirmFn = defaultConfirm }: ShellProps) {
       <div className="main">
         <header className="topbar">
           <SyncBanner status={status} />
-          <button type="button" className="link" onClick={() => void signOut()}>
+          <button type="button" className="link" disabled={signOutBusy} onClick={() => void signOut()}>
             退出登录
           </button>
         </header>
