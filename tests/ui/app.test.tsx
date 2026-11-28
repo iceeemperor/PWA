@@ -100,6 +100,38 @@ describe('App: login and session (brief)', () => {
     expect(auth.getUserId()).not.toBeNull();
   });
 
+  it('sign-out asks about a change written after the banner loaded, even while the banner lags', async () => {
+    const confirmFn = vi.fn(() => false);
+    renderShell({ confirmFn });
+    expect(await screen.findByText('已同步')).toBeInTheDocument(); // loaded with 0 pending
+    // Hold every later banner refresh, so the banner provably still shows 0 when the click lands.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const realFailed = repo.failedOps.bind(repo);
+    vi.spyOn(repo, 'failedOps').mockImplementation(async () => {
+      await gate;
+      return realFailed();
+    });
+    await repo.create('todos', { title: 'fresh' });
+    expect(screen.getByText('已同步')).toBeInTheDocument();
+    await userEvent.click(screen.getByText('退出登录'));
+    expect(confirmFn).toHaveBeenCalledTimes(1);
+    expect(confirmFn).toHaveBeenCalledWith(expect.stringContaining('还有 1 项'));
+    expect(auth.getUserId()).not.toBeNull();
+    release();
+  });
+
+  it('sign-out still asks (without a count) when the pending count cannot be read', async () => {
+    const confirmFn = vi.fn(() => false);
+    renderShell({ confirmFn });
+    expect(await screen.findByText('已同步')).toBeInTheDocument();
+    vi.spyOn(repo, 'pendingCount').mockRejectedValue(new Error('idb down'));
+    await userEvent.click(screen.getByText('退出登录'));
+    expect(confirmFn).toHaveBeenCalledTimes(1);
+    expect(confirmFn).toHaveBeenCalledWith(expect.stringContaining('可能还有'));
+    expect(auth.getUserId()).not.toBeNull();
+  });
+
   it('sign-out with nothing pending does not ask', async () => {
     const confirmFn = vi.fn();
     renderShell({ confirmFn });
