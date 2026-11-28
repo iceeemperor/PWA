@@ -21,16 +21,17 @@ const HIDDEN: WeatherView = { kind: 'hidden' };
 
 /** After a failed request, no new request for this long. In memory only: 近期 remounts on every tab switch. */
 export const WEATHER_BACKOFF_MS = 10 * 60 * 1000;
-let lastFailAt: number | null = null;
+let lastFail: { latitude: number; longitude: number; at: number } | null = null;
 
 /** Tests only: forget the last failed request. */
 export function resetWeatherBackoff(): void {
-  lastFailAt = null;
+  lastFail = null;
 }
 
-function inBackoff(nowMs: number): boolean {
-  if (lastFailAt === null) return false;
-  const since = nowMs - lastFailAt;
+/** The backoff belongs to the city that failed; another city (other latitude/longitude) is not held back. */
+function inBackoff(city: City, nowMs: number): boolean {
+  if (lastFail === null || lastFail.latitude !== city.latitude || lastFail.longitude !== city.longitude) return false;
+  const since = nowMs - lastFail.at;
   // A clock that went back ends the wait rather than stretching it.
   return since >= 0 && since < WEATHER_BACKOFF_MS;
 }
@@ -101,7 +102,7 @@ export async function loadWeather(db: LocalDb, o: LoadOptions): Promise<WeatherL
     const oldView = (): WeatherView =>
       old ? viewOf(city, old.forecast, o.now(), localTimeOf(new Date(old.fetchedAt), deviceZone())) : HIDDEN;
 
-    if (inBackoff(now.getTime())) return oldView();
+    if (inBackoff(city, now.getTime())) return oldView();
     if (old) o.onInterim?.(oldView());
 
     let forecast: Forecast;
@@ -109,11 +110,12 @@ export async function loadWeather(db: LocalDb, o: LoadOptions): Promise<WeatherL
       forecast = await fetchForecast(city, { fetchFn: abortable(o.fetchFn, o.signal) });
     } catch (e) {
       if (o.signal.aborted) return HIDDEN;
-      lastFailAt = o.now().getTime();
+      lastFail = { latitude: city.latitude, longitude: city.longitude, at: o.now().getTime() };
       console.error('Weather request failed:', describe(e));
       return oldView();
     }
-    lastFailAt = null;
+    // A success ends the backoff of its own city only; another city's failure keeps waiting.
+    if (lastFail && lastFail.latitude === city.latitude && lastFail.longitude === city.longitude) lastFail = null;
     const fetchedAt = o.now();
     try {
       await saveCache(db, { city, fetchedAt: fetchedAt.toISOString(), forecast });

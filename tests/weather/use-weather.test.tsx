@@ -420,6 +420,40 @@ it('the backoff skips the request without a cache too, and a success ends it', a
   expect(ok).toHaveBeenCalledTimes(1);
 });
 
+it('the backoff is per city: a new city fetches at once, the failed one still waits', async () => {
+  await setCity(db, SH);
+  expect(await load(failFetch())).toEqual(HIDDEN);
+  vi.setSystemTime(Date.parse(NOW) + 2 * MINUTE);
+
+  // City B inside A's window: fetches at once (the city change also dropped the cache).
+  await setCity(db, BJ);
+  const okB = okFetch();
+  expect(await load(okB)).toEqual({ kind: 'ready', text: '北京：未来三天都是多云', staleAt: null });
+  expect(okB).toHaveBeenCalledTimes(1);
+
+  // Back to A inside its window: B's success did not clear A's backoff, so no request.
+  vi.setSystemTime(Date.parse(NOW) + 4 * MINUTE);
+  await setCity(db, SH);
+  const okA = okFetch();
+  expect(await load(okA)).toEqual(HIDDEN);
+  expect(okA).not.toHaveBeenCalled();
+});
+
+it('a new city fetches at once on remount, inside the old city window', async () => {
+  await setCity(db, SH);
+  const failed = failFetch();
+  const h = renderHookView({ fetchFn: failed });
+  await waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
+  await settle();
+  h.unmount();
+  vi.setSystemTime(Date.parse(NOW) + 3 * MINUTE);
+  await setCity(db, BJ);
+  const ok = okFetch();
+  const again = renderHookView({ fetchFn: ok });
+  await waitFor(() => expect(again.latest()).toEqual({ kind: 'ready', text: '北京：未来三天都是多云', staleAt: null }));
+  expect(ok).toHaveBeenCalledTimes(1);
+});
+
 it('a storage error after a good render keeps the line as it was', async () => {
   await setCity(db, SH);
   await saveCache(db, shCache(ago(1 * HOUR)));
